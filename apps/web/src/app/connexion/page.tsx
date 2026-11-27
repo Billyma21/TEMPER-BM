@@ -47,7 +47,7 @@ export default function LoginPage() {
     <div className="grid min-h-dvh lg:grid-cols-2">
       <div className="relative hidden overflow-hidden bg-cacao-900 p-12 text-white lg:flex lg:flex-col lg:justify-between">
         <div className="flex items-center gap-2">
-          <span className="grid size-9 place-items-center rounded-lg bg-or-500 font-bold text-cacao-950">T</span>
+          <img src="/logo.svg" alt="" width={36} height={36} className="size-9" />
           <span className="font-semibold tracking-wide">TEMPER</span>
         </div>
         <div>

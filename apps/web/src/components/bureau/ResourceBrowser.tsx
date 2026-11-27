@@ -40,6 +40,7 @@ const WRITABLE = new Set(['string', 'int', 'bigint', 'float', 'decimal', 'bool',
 
 export function ResourceBrowser({ subject }: { subject: SubjectName }) {
   const t = useTranslations('table');
+  const shell = useTranslations('shell');
   const r = useTranslations('resource');
   const toast = useToast();
   const { ability } = useSession();
@@ -114,7 +115,11 @@ export function ResourceBrowser({ subject }: { subject: SubjectName }) {
 
   const columns = useMemo(() => {
     const names = meta.data?.fields.filter((field) => field.read).map((field) => field.name) ?? Object.keys(list.data?.items[0] ?? {});
-    return names.filter((name) => name !== 'id').slice(0, 8).map((name) => ({
+    const readable = names.filter((name) => name !== 'id' && !name.endsWith('Id'));
+    const pool = readable.length > 0 ? readable : names.filter((name) => name !== 'id');
+    const lead = ['number', 'code', 'name', 'status', 'kind'];
+    const chosen = [...lead.filter((name) => pool.includes(name)), ...pool.filter((name) => !lead.includes(name))].slice(0, 8);
+    return chosen.map((name) => ({
       key: name,
       label: name,
       numeric: ['int', 'decimal', 'float', 'bigint'].includes(meta.data?.fields.find((field) => field.name === name)?.kind ?? ''),
@@ -164,7 +169,7 @@ export function ResourceBrowser({ subject }: { subject: SubjectName }) {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">{SUBJECTS[subject].label}</h1>
-          <p className="text-sm text-cacao-700/60">{meta.data?.label}</p>
+          <p className="text-sm text-cacao-800">{meta.data?.label}</p>
         </div>
         {canCreate && (
           <Button
@@ -180,6 +185,8 @@ export function ResourceBrowser({ subject }: { subject: SubjectName }) {
       </header>
       {list.isError ? (
         <Empty title={r('denied')} hint={list.error instanceof ApiError ? list.error.body?.message : undefined} />
+      ) : list.isPending ? (
+        <p className="px-1 text-sm text-cacao-800">{shell('loading')}</p>
       ) : (
         <DataTable
           columns={columns}

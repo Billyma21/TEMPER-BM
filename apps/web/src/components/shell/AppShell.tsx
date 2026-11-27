@@ -56,7 +56,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const nav = (
     <nav className="flex h-full flex-col gap-1 p-3">
       <Link href="/" className="mb-4 flex items-center gap-2 px-2 pt-1">
-        <span className="grid size-8 place-items-center rounded-lg bg-or-500 font-bold text-cacao-950">T</span>
+        <img src="/logo.svg" alt="" width={32} height={32} className="size-8" />
         <span className="leading-tight">
           <span className="block text-sm font-bold tracking-wide text-white">TEMPER</span>
           <span className="block text-[11px] text-cacao-100">Maison Aurum</span>

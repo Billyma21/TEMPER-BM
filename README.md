@@ -1,13 +1,27 @@
-# TEMPER
+<p align="center">
+  <img src="docs/apercu/logo.svg" width="88" alt="Marque TEMPER, courbe de tempérage sur fond cacao">
+</p>
 
-**Le système de gestion intégré de la chocolaterie.** Personnel, badges, pointage, plannings, production, recettes, qualité et HACCP, lots et traçabilité, stocks, outils, maintenance, achats, ventes, boutiques, logistique, finance, santé et sécurité : un seul outil, deux façons de le vivre.
+<h1 align="center">TEMPER</h1>
 
-- **Mode Bureau** : l interface classique, exhaustive et rapide, construite à partir des droits de chacun.
-- **Mode Monde** : le jumeau numérique 3D isométrique de l entreprise. Les prospects sont des personnages qui changent de pièce, chaque commande client est un chantier dont l immeuble monte, les machines en panne clignotent dans le hall, les bâtiments hors de vos fonctions restent fermés à clé.
+<p align="center">
+  <strong>Le système de gestion de la chocolaterie, du badge à la livraison.</strong><br>
+  Personnel, accès, temps, production, qualité, stocks, maintenance, achats, ventes, boutiques, logistique et finance.
+</p>
 
-Société de démonstration fictive : **Maison Aurum Chocolatier SA** (usine et siège à Bruxelles, entrepôt à Vilvorde, deux boutiques).
+Société de démonstration : **Maison Aurum Chocolatier SA**. Usine et siège à Bruxelles, entrepôt à Vilvorde, deux boutiques. Les captures ci-dessous viennent de cette base, avec le compte opératrice Emma Janssens.
 
-![Monde 3D, vue commerciale](docs/captures/monde-commerciale.png)
+| | |
+|---|---|
+| ![Page de connexion](docs/apercu/connexion.png) | ![Espace du jour](docs/apercu/bureau-accueil.png) |
+| Connexion | Journée, quêtes et alertes du périmètre |
+| ![Ordres de fabrication](docs/apercu/bureau-ordres.png) | ![Jumeau de l usine](docs/apercu/monde-usine.png) |
+| Ordres de fabrication, quantités et statut | Usine de Bruxelles-Sud, machine en panne au hall |
+
+Deux façons de travailler sur les mêmes données et les mêmes droits :
+
+- **Bureau** : listes, fiches, validations, exports. Chaque écran ne propose que les actions autorisées.
+- **Monde** : jumeau isométrique du site. Une machine en panne se voit dans le hall, les bâtiments hors fonction restent fermés, les noms n apparaissent que pour qui a le droit de présence nominative.
 
 ---
 
