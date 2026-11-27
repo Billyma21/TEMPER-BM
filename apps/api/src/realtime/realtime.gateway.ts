@@ -33,16 +33,19 @@ export class RealtimeGateway implements OnGatewayConnection {
   async handleConnection(client: Socket) {
     const token = readCookie(client.handshake.headers.cookie, env().SESSION_COOKIE);
     const p = token ? await this.auth.authenticateSession(token) : null;
-    if (!p || !p.employee) {
+    if (!p) {
       client.disconnect(true);
       return;
     }
+    const rooms = [`user:${p.id}`];
     const e = p.employee;
-    const rooms = [`site:${e.siteId}`, `user:${p.id}`];
-    if (p.ability.can('read', asSubject('WorldPresence', { siteId: e.siteId, teamId: '__any__', departmentId: '__any__' }))) {
-      rooms.push(`presence:site:${e.siteId}`);
-    } else if (e.teamId && p.ability.can('read', asSubject('WorldPresence', { siteId: e.siteId, teamId: e.teamId, departmentId: e.departmentId }))) {
-      rooms.push(`presence:team:${e.teamId}`);
+    if (e) {
+      rooms.push(`site:${e.siteId}`);
+      if (p.ability.can('read', asSubject('WorldPresence', { siteId: e.siteId, teamId: '__any__', departmentId: '__any__' }))) {
+        rooms.push(`presence:site:${e.siteId}`);
+      } else if (e.teamId && p.ability.can('read', asSubject('WorldPresence', { siteId: e.siteId, teamId: e.teamId, departmentId: e.departmentId }))) {
+        rooms.push(`presence:team:${e.teamId}`);
+      }
     }
     await client.join(rooms);
     this.log.debug(`Connexion ${p.id} : ${rooms.join(', ')}`);

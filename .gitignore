@@ -14,6 +14,7 @@ playwright-report/
 test-results/
 
 # Outillage poste de travail (jamais versionné)
+AGENTS.md
 .cursor/
 PROMPT_CURSOR.md
 .vscode/

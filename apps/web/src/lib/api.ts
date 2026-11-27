@@ -39,7 +39,7 @@ export class ApiError extends Error {
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  if (DEMO) return demoResponse<T>(path);
+  if (DEMO) return demoResponse<T>(path, init);
   const res = await fetch(`/api/v1${path}`, {
     ...init,
     credentials: 'include',
@@ -51,12 +51,36 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-function demoResponse<T>(path: string): T {
+export async function downloadCsv(path: string, filename: string) {
+  if (DEMO) throw new ApiError(409, { code: 'CONFLICT', message: 'Export indisponible en démonstration' });
+  const res = await fetch(`/api/v1${path}`, { credentials: 'include' });
+  if (!res.ok) throw new ApiError(res.status, await res.json().catch(() => null));
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function demoResponse<T>(path: string, init?: RequestInit): T {
+  const method = (init?.method ?? 'GET').toUpperCase();
   const p = DEMO_PROFILES[demoProfile()];
   if (path.startsWith('/auth/me')) return p.me as unknown as T;
   if (path.startsWith('/world/snapshot')) return p.world as unknown as T;
   if (path.startsWith('/time/me/today')) return p.today as unknown as T;
   if (path.startsWith('/auth/login')) return { mfaRequired: false } as T;
+  if (path.startsWith('/auth/logout')) return undefined as T;
+  if (method !== 'GET') throw new ApiError(409, { code: 'CONFLICT', message: 'Action indisponible en démonstration' });
+  if (path.startsWith('/approvals/inbox')) return { toDecide: [], mine: [] } as T;
+  if (path.startsWith('/auth/sessions') || path.startsWith('/auth/webauthn')) return { items: [] } as T;
+  const clean = path.split('?')[0] ?? path;
+  if (clean.endsWith('/meta')) return { subject: '', label: '', fields: [] } as T;
+  if (clean.endsWith('/audit')) return { items: [] } as T;
+  const parts = clean.split('/').filter(Boolean);
+  if (parts.length === 2) return { items: [], total: 0, page: 1, pageSize: 25 } as T;
+  if (parts.length >= 3) return {} as T;
   return null as T;
 }
 

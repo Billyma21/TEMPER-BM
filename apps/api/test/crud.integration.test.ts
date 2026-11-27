@@ -304,4 +304,101 @@ describe('Gabarit CRUD', () => {
       expect(refused, subject).toBe(true);
     });
   }
+
+  it('décrit les champs lisibles sans secret', async () => {
+    const secours = actors.find((actor) => actor.email.startsWith('secours'));
+    const meta = await request(server).get('/api/v1/organisation/companies/meta').set('Cookie', secours!.cookie);
+    expect(meta.status).toBe(200);
+    expect(meta.body.fields.some((field: { name: string }) => field.name === 'legalName')).toBe(true);
+    expect(JSON.stringify(meta.body)).not.toContain('passwordHash');
+  });
+
+  it('liste les sessions et en révoque une autre', async () => {
+    const emma = actors.find((actor) => actor.email.startsWith('emma'));
+    const before = await request(server).get('/api/v1/auth/sessions').set('Cookie', emma!.cookie);
+    const second = await login(emma!.email);
+    const list = await request(server).get('/api/v1/auth/sessions').set('Cookie', emma!.cookie);
+    expect(list.status).toBe(200);
+    expect(list.body.items.some((row: { current: boolean }) => row.current)).toBe(true);
+    expect(JSON.stringify(list.body)).not.toContain('tokenHash');
+    const known = new Set((before.body.items as Array<{ id: string }>).map((row) => row.id));
+    const other = (list.body.items as Array<{ id: string }>).find((row) => !known.has(row.id));
+    expect(other).toBeTruthy();
+    const revoked = await request(server).post(`/api/v1/auth/sessions/${other!.id}/revoke`).set('Cookie', emma!.cookie);
+    expect(revoked.status).toBe(200);
+    const dead = await request(server).get('/api/v1/auth/me').set('Cookie', second);
+    expect(dead.status).toBe(401);
+  });
+
+  it('enrôle le TOTP et consomme un code de secours', async () => {
+    const { totp } = await import('../src/auth/totp.js');
+    const emma = actors.find((actor) => actor.email.startsWith('emma'));
+    const enrolled = await request(server).post('/api/v1/auth/mfa/enroll').set('Cookie', emma!.cookie);
+    expect(enrolled.status, JSON.stringify(enrolled.body)).toBe(201);
+    expect(enrolled.body.qrSvg).toContain('<svg');
+    const confirmed = await request(server).post('/api/v1/auth/mfa/confirm').set('Cookie', emma!.cookie).send({ code: totp(enrolled.body.secret) });
+    expect(confirmed.status, JSON.stringify(confirmed.body)).toBe(200);
+    expect(confirmed.body.backupCodes).toHaveLength(8);
+    const backup = confirmed.body.backupCodes[0] as string;
+    const first = await request(server).post('/api/v1/auth/mfa/verify').set('Cookie', emma!.cookie).send({ code: backup });
+    expect(first.status).toBe(200);
+    const replay = await request(server).post('/api/v1/auth/mfa/verify').set('Cookie', emma!.cookie).send({ code: backup });
+    expect(replay.status).toBe(401);
+  });
+
+  it('refuse une demande à son auteur et l accepte au manager', async () => {
+    const emma = actors.find((actor) => actor.email.startsWith('emma'));
+    const marc = await db.user.findUniqueOrThrow({ where: { email: 'marc.dubois@maison-aurum.test' }, select: { id: true } });
+    const marcCookie = await login('marc.dubois@maison-aurum.test');
+    const own = await db.approvalRequest.create({
+      data: {
+        policy: 'LEAVE_REQUEST',
+        subjectType: 'LeaveRequest',
+        subjectId: '00000000-0000-7000-8000-000000000011',
+        requesterUserId: marc.id,
+        steps: [['MANAGER_EQUIPE']],
+        status: 'PENDING',
+      },
+    });
+    const self = await request(server).post(`/api/v1/approvals/${own.id}/decide`).set('Cookie', marcCookie).send({ decision: 'APPROVED' });
+    expect(self.status).toBe(403);
+
+    const anon = await request(server).get('/api/v1/approvals/inbox');
+    expect(anon.status).toBe(401);
+    const foreign = await db.approvalRequest.create({
+      data: {
+        policy: 'LEAVE_REQUEST',
+        subjectType: 'LeaveRequest',
+        subjectId: '00000000-0000-7000-8000-000000000012',
+        requesterUserId: emma!.id,
+        requesterEmployeeId: emma!.employeeId,
+        steps: [['MANAGER_EQUIPE']],
+        status: 'PENDING',
+      },
+    });
+    const inbox = await request(server).get('/api/v1/approvals/inbox').set('Cookie', marcCookie);
+    expect(inbox.status).toBe(200);
+    expect(inbox.body.toDecide.some((row: { id: string }) => row.id === foreign.id)).toBe(true);
+    const mine = await request(server).get('/api/v1/approvals/inbox').set('Cookie', emma!.cookie);
+    expect(mine.body.toDecide.some((row: { id: string }) => row.id === foreign.id)).toBe(false);
+    const decided = await request(server).post(`/api/v1/approvals/${foreign.id}/decide`).set('Cookie', marcCookie).send({ decision: 'APPROVED', comment: 'Accord' });
+    expect(decided.status, JSON.stringify(decided.body)).toBe(200);
+    expect(decided.body.status).toBe('APPROVED');
+    const note = await db.notification.findFirst({ where: { userId: emma!.id, kind: 'APPROVAL' } });
+    expect(note?.title).toBe('Demande acceptée');
+  });
+
+  it('prépare une clé WebAuthn et refuse une attestation vide', async () => {
+    const secours = actors.find((actor) => actor.email.startsWith('secours'));
+    const options = await request(server).post('/api/v1/auth/webauthn/register/options').set('Cookie', secours!.cookie);
+    expect(options.status, JSON.stringify(options.body)).toBe(201);
+    expect(typeof options.body.challenge).toBe('string');
+    const refused = await request(server).post('/api/v1/auth/webauthn/register/verify').set('Cookie', secours!.cookie).send({
+      id: 'aaaaaaaaaaaa',
+      rawId: 'aaaaaaaaaaaa',
+      type: 'public-key',
+      response: { clientDataJSON: 'aaaaaaaa', attestationObject: 'aaaaaaaa' },
+    });
+    expect(refused.status).toBe(400);
+  });
 });

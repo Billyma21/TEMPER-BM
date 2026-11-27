@@ -10,9 +10,34 @@ export const LoginSchema = z.object({
 });
 export type LoginInput = z.infer<typeof LoginSchema>;
 
+/** Code TOTP à 6 chiffres, ou code de secours à 8 caractères hexadécimaux. */
 export const MfaVerifySchema = z.object({
-  code: z.string().regex(/^\d{6}$/, 'Code à 6 chiffres'),
+  code: z
+    .string()
+    .trim()
+    .regex(/^(\d{6}|[a-f0-9]{8})$/i, 'Code à 6 chiffres ou code de secours'),
 });
+
+export const DecideSchema = z.object({
+  decision: z.enum(['APPROVED', 'REJECTED']),
+  comment: z.string().trim().max(500).optional(),
+});
+export type DecideInput = z.infer<typeof DecideSchema>;
+
+/** Réponse d attestation renvoyée par le navigateur lors de l enrôlement d une clé. */
+export const WebAuthnRegistrationSchema = z.object({
+  id: z.string().min(8).max(1024),
+  rawId: z.string().min(8).max(1024),
+  type: z.literal('public-key'),
+  response: z.object({
+    clientDataJSON: z.string().min(8),
+    attestationObject: z.string().min(8),
+    transports: z.array(z.string()).optional(),
+  }),
+  clientExtensionResults: z.record(z.string(), z.unknown()).optional(),
+  authenticatorAttachment: z.enum(['platform', 'cross-platform']).optional(),
+});
+export type WebAuthnRegistrationInput = z.infer<typeof WebAuthnRegistrationSchema>;
 
 /** Scan à la borne : badge NFC, ou matricule + PIN en secours. */
 export const KioskScanSchema = z

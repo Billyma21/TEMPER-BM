@@ -5,13 +5,17 @@
  * MAAYOUD
  */
 import { clsx } from 'clsx';
-import { Building2, Gamepad2, Home, LogOut, Menu, ShieldAlert, X } from 'lucide-react';
+import { Building2, ClipboardCheck, Gamepad2, Home, LogOut, Menu, Shield, ShieldAlert, X } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 import { useEffect, useState } from 'react';
 import { ModuleIcon } from '@/components/ui/Icon';
+import { LOCALES, type Locale } from '@/i18n/messages';
 import { ApiError, DEMO, DEMO_PROFILES, type DemoProfile, api, demoProfile } from '@/lib/api';
 import { SessionProvider, useMeQuery } from '@/lib/session';
+import { Notifications } from './Notifications';
+import { useLocaleSwitch } from './Providers';
 
 const ROLE_LABELS: Record<string, string> = {
   EMPLOYE: 'Employé',
@@ -23,10 +27,12 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const t = useTranslations('shell');
   const router = useRouter();
   const pathname = usePathname();
   const { data: me, error, isLoading } = useMeQuery();
   const [open, setOpen] = useState(false);
+  const { locale, setLocale } = useLocaleSwitch();
 
   useEffect(() => {
     if (error instanceof ApiError && error.status === 401) router.replace('/connexion');
@@ -38,7 +44,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="grid h-dvh place-items-center text-sm text-cacao-700">
         <div className="flex items-center gap-3">
           <span className="size-2 animate-ping rounded-full bg-lavande-500" />
-          Chargement de votre espace
+          {t('loading')}
         </div>
       </div>
     );
@@ -53,11 +59,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <span className="grid size-8 place-items-center rounded-lg bg-or-500 font-bold text-cacao-950">T</span>
         <span className="leading-tight">
           <span className="block text-sm font-bold tracking-wide text-white">TEMPER</span>
-          <span className="block text-[11px] text-cacao-100/60">Maison Aurum</span>
+          <span className="block text-[11px] text-cacao-100">Maison Aurum</span>
         </span>
       </Link>
-      <NavItem href="/" active={pathname === '/'} icon={<Home className="size-4" />} label="Mon espace" />
-      <div className="mt-3 mb-1 px-2 text-[10px] font-semibold tracking-widest text-cacao-100/40 uppercase">Modules</div>
+      <NavItem href="/" active={pathname === '/'} icon={<Home className="size-4" />} label={t('home')} />
+      <NavItem href="/validations" active={pathname.startsWith('/validations')} icon={<ClipboardCheck className="size-4" />} label={t('validations')} />
+      <NavItem href="/securite" active={pathname.startsWith('/securite')} icon={<Shield className="size-4" />} label={t('security')} />
+      <div className="mt-3 mb-1 px-2 text-[10px] font-semibold tracking-widest text-cacao-100 uppercase">{t('modules')}</div>
       {me.modules
         .filter((m) => m.key !== 'monde')
         .map((m) => (
@@ -71,9 +79,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             await api('/auth/logout', { method: 'POST' }).catch(() => undefined);
             router.replace('/connexion');
           }}
-          className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm text-cacao-100/70 hover:bg-white/5 hover:text-white"
+          className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm text-cacao-100 hover:bg-white/5 hover:text-white"
         >
-          <LogOut className="size-4" /> Se déconnecter
+          <LogOut className="size-4" /> {t('logout')}
         </button>
       </div>
     </nav>
@@ -86,33 +94,41 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {open && (
           <div className="fixed inset-0 z-50 flex lg:hidden">
             <aside className="w-72 bg-cacao-900">{nav}</aside>
-            <button type="button" aria-label="Fermer le menu" className="flex-1 bg-black/40" onClick={() => setOpen(false)} />
+            <button type="button" aria-label={t('closeMenu')} className="flex-1 bg-black/40" onClick={() => setOpen(false)} />
           </div>
         )}
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="flex h-14 shrink-0 items-center gap-3 border-b border-black/5 bg-white/80 px-4 backdrop-blur">
-            <button type="button" className="lg:hidden" aria-label="Ouvrir le menu" onClick={() => setOpen(true)}>
+            <button type="button" className="lg:hidden" aria-label={t('openMenu')} onClick={() => setOpen(true)}>
               {open ? <X className="size-5" /> : <Menu className="size-5" />}
             </button>
-            <div className="flex rounded-full bg-surface p-1 text-sm font-medium" role="tablist" aria-label="Mode d affichage">
-              <Link href="/" role="tab" aria-selected={!isWorld} className={clsx('flex items-center gap-1.5 rounded-full px-3 py-1.5', !isWorld ? 'bg-white shadow-sm' : 'text-cacao-700/70')}>
-                <Building2 className="size-4" /> Bureau
+            <div className="flex rounded-full bg-surface p-1 text-sm font-medium" role="tablist" aria-label={t('mode')}>
+              <Link href="/" role="tab" aria-selected={!isWorld} className={clsx('flex items-center gap-1.5 rounded-full px-3 py-1.5', !isWorld ? 'bg-white shadow-sm' : 'text-cacao-800')}>
+                <Building2 className="size-4" /> {t('bureau')}
               </Link>
-              <Link href="/monde" role="tab" aria-selected={isWorld} className={clsx('flex items-center gap-1.5 rounded-full px-3 py-1.5', isWorld ? 'bg-lavande-500 text-white shadow-sm' : 'text-cacao-700/70')}>
-                <Gamepad2 className="size-4" /> Monde
+              <Link href="/monde" role="tab" aria-selected={isWorld} className={clsx('flex items-center gap-1.5 rounded-full px-3 py-1.5', isWorld ? 'bg-lavande-500 text-white shadow-sm' : 'text-cacao-800')}>
+                <Gamepad2 className="size-4" /> {t('world')}
               </Link>
             </div>
-            <div className="ml-auto flex items-center gap-3">
+            <div className="ml-auto flex items-center gap-2">
+              <div className="flex rounded-full bg-surface p-0.5 text-[11px] font-semibold">
+                {LOCALES.map((code) => (
+                  <button key={code} type="button" onClick={() => setLocale(code as Locale)} className={clsx('rounded-full px-2 py-1 uppercase', locale === code ? 'bg-white text-cacao-900' : 'text-cacao-800')} aria-pressed={locale === code}>
+                    {code}
+                  </button>
+                ))}
+              </div>
+              <Notifications />
               <div className="hidden text-right leading-tight sm:block">
                 <div className="text-sm font-semibold">{name}</div>
-                <div className="text-[11px] text-cacao-700/60">{me.activeRoles.filter((r) => r !== 'EMPLOYE').map((r) => ROLE_LABELS[r] ?? r).join(', ') || 'Employé'}</div>
+                <div className="text-[11px] text-cacao-800">{me.activeRoles.filter((r) => r !== 'EMPLOYE').map((r) => ROLE_LABELS[r] ?? r).join(', ') || 'Employé'}</div>
               </div>
-              <span className="grid size-9 place-items-center rounded-full bg-lavande-100 font-semibold text-lavande-600">{name.slice(0, 1)}</span>
+              <span className="grid size-9 place-items-center rounded-full bg-lavande-100 font-semibold text-cacao-900">{name.slice(0, 1)}</span>
             </div>
           </header>
           {me.mfaPending && (
             <div className="flex items-center gap-2 bg-or-100 px-4 py-2 text-sm text-cacao-800">
-              <ShieldAlert className="size-4 shrink-0" /> Certaines de vos fonctions exigent la double authentification. Activez-la dans votre profil pour y accéder.
+              <ShieldAlert className="size-4 shrink-0" /> {t('mfaBanner')}
             </div>
           )}
           <main className={clsx('min-h-0 flex-1', isWorld ? 'overflow-hidden' : 'overflow-y-auto')}>{children}</main>
@@ -128,7 +144,7 @@ function NavItem({ href, active, icon, label }: { href: string; active: boolean;
       href={href}
       className={clsx(
         'flex items-center gap-2.5 rounded-lg px-2 py-2 text-sm transition-colors',
-        active ? 'bg-white/10 font-semibold text-white' : 'text-cacao-100/70 hover:bg-white/5 hover:text-white',
+        active ? 'bg-white/10 font-semibold text-white' : 'text-cacao-100 hover:bg-white/5 hover:text-white',
       )}
     >
       {icon}
@@ -138,11 +154,12 @@ function NavItem({ href, active, icon, label }: { href: string; active: boolean;
 }
 
 function DemoSwitcher() {
+  const t = useTranslations('shell');
   const [p, setP] = useState<DemoProfile>('noa');
   useEffect(() => setP(demoProfile()), []);
   return (
-    <label className="block rounded-lg bg-white/5 p-2 text-[11px] text-cacao-100/70">
-      Démo : voir avec les droits de
+    <label className="block rounded-lg bg-white/5 p-2 text-[11px] text-cacao-100">
+      {t('demo')}
       <select
         value={p}
         onChange={(e) => {

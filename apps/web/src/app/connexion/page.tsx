@@ -7,10 +7,12 @@
 import { LoginSchema } from '@temper/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 import { useState } from 'react';
 import { ApiError, DEMO, DEMO_PROFILES, type DemoProfile, api } from '@/lib/api';
 
 export default function LoginPage() {
+  const t = useTranslations('auth');
   const router = useRouter();
   const qc = useQueryClient();
   const [step, setStep] = useState<'credentials' | 'mfa'>('credentials');
@@ -23,7 +25,7 @@ export default function LoginPage() {
     try {
       if (step === 'credentials') {
         const parsed = LoginSchema.safeParse({ email: form.get('email'), password: form.get('password') });
-        if (!parsed.success) throw new Error('Adresse e-mail ou mot de passe invalide');
+        if (!parsed.success) throw new Error(t('invalid'));
         const res = await api<{ mfaRequired: boolean }>('/auth/login', { method: 'POST', body: JSON.stringify(parsed.data) });
         if (res.mfaRequired) {
           setStep('mfa');
@@ -35,7 +37,7 @@ export default function LoginPage() {
       await qc.invalidateQueries();
       router.replace('/');
     } catch (e) {
-      setError(e instanceof ApiError && e.status === 429 ? 'Trop de tentatives. Réessayez dans une minute.' : e instanceof ApiError ? 'Identifiants invalides' : (e as Error).message);
+      setError(e instanceof ApiError && e.status === 429 ? t('rate') : e instanceof ApiError ? t('invalid') : (e as Error).message);
     } finally {
       setPending(false);
     }
@@ -56,14 +58,14 @@ export default function LoginPage() {
           </h1>
           <p className="mt-4 max-w-md text-sm text-cacao-100/70">Personnel, badges, production, qualité, stocks, ventes : un seul système, en mode bureau ou en mode monde.</p>
         </div>
-        <p className="text-xs text-cacao-100/40">Maison Aurum Chocolatier · MAAYOUD</p>
+        <p className="text-xs text-cacao-100">Maison Aurum Chocolatier · MAAYOUD</p>
       </div>
       <div className="grid place-items-center p-6">
         <form action={submit} className="w-full max-w-sm space-y-4">
-          <h2 className="text-2xl font-semibold">{step === 'credentials' ? 'Connexion' : 'Double authentification'}</h2>
+          <h2 className="text-2xl font-semibold">{step === 'credentials' ? t('title') : t('mfaTitle')}</h2>
           {DEMO && step === 'credentials' ? (
             <div className="space-y-2">
-              <p className="text-sm text-cacao-700/70">Mode démonstration : choisissez un profil pour voir l interface avec ses droits.</p>
+              <p className="text-sm text-cacao-800">{t('demoHint')}</p>
               {(Object.keys(DEMO_PROFILES) as DemoProfile[]).map((k) => (
                 <button
                   key={k}
@@ -92,7 +94,7 @@ export default function LoginPage() {
           ) : (
             <label className="block text-sm">
               <span className="font-medium">Code à 6 chiffres de votre application d authentification</span>
-              <input name="code" inputMode="numeric" pattern="\d{6}" maxLength={6} autoComplete="one-time-code" required className="mt-1 w-full rounded-xl border border-black/10 bg-white px-3 py-2.5 text-center text-xl tracking-[0.4em] outline-none focus:border-lavande-500" />
+              <input name="code" inputMode="text" autoComplete="one-time-code" minLength={6} maxLength={8} required className="mt-1 w-full rounded-xl border border-black/10 bg-white px-3 py-2.5 text-center text-xl tracking-[0.3em] outline-none focus:border-lavande-500" />
             </label>
           )}
           {error && (
@@ -102,7 +104,7 @@ export default function LoginPage() {
           )}
           {!(DEMO && step === 'credentials') && (
             <button disabled={pending} className="w-full rounded-xl bg-cacao-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60">
-              {pending ? 'Vérification' : step === 'credentials' ? 'Se connecter' : 'Valider'}
+              {pending ? '...' : step === 'credentials' ? t('submit') : t('verify')}
             </button>
           )}
         </form>

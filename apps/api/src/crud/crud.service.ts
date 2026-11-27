@@ -202,6 +202,24 @@ export class CrudService {
     };
   }
 
+  /** Champs que la personne peut lire ou écrire. Les secrets et les octets restent absents. */
+  describe(p: Principal, subject: SubjectName) {
+    const meta = resourceMeta(subject);
+    const forbidden = new Set(subjectDef(subject).forbidden ?? []);
+    const fields = meta.fields
+      .filter((field) => !field.secret && field.kind !== 'bytes')
+      .map((field) => ({
+        name: field.name,
+        kind: field.kind,
+        optional: field.optional || field.hasDefault,
+        read: p.ability.can('read', subject, field.name),
+        create: !SERVER_FIELDS.has(field.name) && !forbidden.has('create') && p.ability.can('create', subject),
+        update: !SERVER_FIELDS.has(field.name) && !forbidden.has('update') && p.ability.can('update', subject),
+      }))
+      .filter((field) => field.read || field.create || field.update);
+    return { subject, label: subjectDef(subject).label, fields };
+  }
+
   private rights(p: Principal, action: Action, subject: SubjectName): Record<string, unknown> {
     const where = prismaWhere(p.prismaRules, action, subject, { includeFieldRestricted: true });
     if (where === null) throw new ForbiddenException({ code: 'FORBIDDEN', action, subject });

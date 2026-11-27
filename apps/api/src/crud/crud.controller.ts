@@ -52,6 +52,13 @@ function createResourceController(subject: SubjectName): Type {
       return new StreamableFile(Buffer.from(file.csv, 'utf8'));
     }
 
+    @Get('meta')
+    @Requires('read', subject)
+    @ApiOperation({ summary: `Champs : ${label}` })
+    meta(@CurrentPrincipal() principal: Principal) {
+      return this.crud.describe(principal, subject);
+    }
+
     @Post()
     @Requires('create', subject)
     @ApiOperation({ summary: `Créer : ${label}` })

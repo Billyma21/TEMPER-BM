@@ -7,7 +7,11 @@ import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AuditInterceptor } from './audit/audit.interceptor.js';
 import { AuditService } from './audit/audit.service.js';
+import { ApprovalsController } from './approvals/approvals.controller.js';
+import { ApprovalsService } from './approvals/approvals.service.js';
 import { AccessGuard } from './auth/access.guard.js';
+import { AccountController } from './auth/account.controller.js';
+import { AccountService } from './auth/account.service.js';
 import { AuthController, DevicesController } from './auth/auth.controller.js';
 import { AuthService } from './auth/auth.service.js';
 import { ApiExceptionFilter } from './common/api-exception.filter.js';
@@ -28,11 +32,13 @@ const requestBudget = process.env.NODE_ENV === 'test' ? 20_000 : 300;
 
 @Module({
   imports: [PrismaModule, ThrottlerModule.forRoot([{ ttl: 60_000, limit: requestBudget }])],
-  controllers: [HealthController, AuthController, DevicesController, TimeController, WorldController, ...domainControllers],
+  controllers: [HealthController, AuthController, AccountController, ApprovalsController, DevicesController, TimeController, WorldController, ...domainControllers],
   providers: [
     RedisService,
     AccessService,
     AuthService,
+    AccountService,
+    ApprovalsService,
     AuditService,
     RealtimeGateway,
     TimeService,

@@ -6,8 +6,7 @@
 import { ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { MODULES, openWorldZones, selfServiceSubjects, visibleModules } from '@temper/permissions';
 import type { LoginInput } from '@temper/shared';
-import { randomToken, safeEqual, sha256, verifyPassword } from '../common/crypto.js';
-import { decryptField } from '../common/crypto.js';
+import { decryptField, randomToken, safeEqual, sha256, verifyPassword } from '../common/crypto.js';
 import { env } from '../config/env.js';
 import { AccessService } from '../permissions/access.service.js';
 import type { Principal } from '../permissions/principal.js';
@@ -63,7 +62,17 @@ export class AuthService {
     const user = await this.prisma.db.user.findUniqueOrThrow({ where: { id: principal.id } });
     if (!user.mfaEnabled || !user.mfaSecretEnc) throw new ForbiddenException({ code: 'MFA_NOT_ENROLLED' });
     const secret = decryptField(user.mfaSecretEnc, env().FIELD_ENCRYPTION_KEY);
-    if (!verifyTotp(secret, code)) throw new UnauthorizedException({ code: 'INVALID_MFA_CODE' });
+    const trimmed = code.trim();
+    const totpOk = /^\d{6}$/.test(trimmed) && verifyTotp(secret, trimmed);
+    if (!totpOk) {
+      const hash = sha256(trimmed.toLowerCase());
+      const index = user.recoveryCodesHash.indexOf(hash);
+      if (index < 0) throw new UnauthorizedException({ code: 'INVALID_MFA_CODE' });
+      await this.prisma.db.user.update({
+        where: { id: user.id },
+        data: { recoveryCodesHash: user.recoveryCodesHash.filter((_, i) => i !== index) },
+      });
+    }
     const refreshed = await this.access.forUser(user.id, true, principal.sessionId);
     const session = await this.prisma.db.session.findUniqueOrThrow({ where: { id: principal.sessionId } });
     const capped = new Date(Math.min(session.expiresAt.getTime(), Date.now() + (refreshed?.maxSessionMinutes ?? 60) * 60_000));

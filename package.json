@@ -25,13 +25,16 @@
     "infra:down": "docker compose -f infra/docker-compose.yml down",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md,yml,css}\"",
     "check": "node scripts/check-deliverables.mjs",
+    "e2e": "playwright test",
     "captures": "node scripts/captures.mjs"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.1",
+    "@playwright/test": "^1.65.1",
+    "playwright": "^1.56.1",
     "prettier": "^3.6.2",
     "turbo": "^2.5.8",
-    "typescript": "~5.9.3",
-    "playwright": "^1.56.1"
+    "typescript": "~5.9.3"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
