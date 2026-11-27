@@ -98,6 +98,12 @@ const fr = {
     emptySheets: 'Aucun relevé pour cette période.',
     emptyHolidays: 'Aucun jour férié publié.',
   },
+  production: {
+    tablet: 'Tablette de ligne',
+    emptyTablet: 'Aucune fabrication affichée.',
+    trace: 'Traçabilité aval',
+    emptyTrace: 'Aucun lot enfant.',
+  },
   desk: {
     chart: 'Organigramme',
     chartEmpty: 'Aucune personne dans votre périmètre.',
@@ -229,6 +235,12 @@ const nl: typeof fr = {
     emptySheets: 'Geen loonstaat voor deze periode.',
     emptyHolidays: 'Geen feestdag gepubliceerd.',
   },
+  production: {
+    tablet: 'Lijntablet',
+    emptyTablet: 'Geen fabricage weergegeven.',
+    trace: 'Stroomafwaartse traceerbaarheid',
+    emptyTrace: 'Geen dochterpartij.',
+  },
   desk: {
     chart: 'Organigram',
     chartEmpty: 'Niemand binnen uw bereik.',
@@ -359,6 +371,12 @@ const en: typeof fr = {
     holidays: 'Public holidays',
     emptySheets: 'No timesheet for this period.',
     emptyHolidays: 'No published public holiday.',
+  },
+  production: {
+    tablet: 'Line tablet',
+    emptyTablet: 'No production shown.',
+    trace: 'Downstream traceability',
+    emptyTrace: 'No child batch.',
   },
   desk: {
     chart: 'Organisation chart',

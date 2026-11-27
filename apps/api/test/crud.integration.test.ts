@@ -745,6 +745,92 @@ describe('Gabarit CRUD', () => {
     expect(second.body.balances).toEqual(first.body.balances);
   });
 
+  it('fige une recette approuvée et fabrique sans montrer la formulation', async () => {
+    const secours = actors.find((actor) => actor.email.startsWith('secours'))!;
+    const emma = actors.find((actor) => actor.email.startsWith('emma'))!;
+    const employee = await db.employee.findUniqueOrThrow({ where: { id: emma.employeeId! } });
+    const secret = await request(server).get(`/api/v1/${resourcePath('Recipe')}`).set('Cookie', emma.cookie);
+    expect(secret.status).toBe(403);
+    const source = await db.recipe.findFirstOrThrow({ where: { code: 'R-TAB-NOIR72' }, orderBy: { version: 'desc' } });
+    const deniedVersion = await request(server).post(`/api/v1/production/recipes/${source.id}/versions`).set('Cookie', emma.cookie).send({});
+    expect(deniedVersion.status).toBe(403);
+    const drafted = await request(server).post(`/api/v1/production/recipes/${source.id}/versions`).set('Cookie', secours.cookie).send({ notes: 'Ajustement de gamme' });
+    expect(drafted.status, JSON.stringify(drafted.body)).toBe(201);
+    const sarah = await login('sarah.willems@maison-aurum.test');
+    const quality = await request(server).post(`/api/v1/approvals/${drafted.body.requestId}/decide`).set('Cookie', sarah).send({ decision: 'APPROVED', comment: 'Allergènes inchangés' });
+    expect(quality.status, JSON.stringify(quality.body)).toBe(200);
+    const marc = await login('marc.dubois@maison-aurum.test');
+    const production = await request(server).post(`/api/v1/approvals/${drafted.body.requestId}/decide`).set('Cookie', marc).send({ decision: 'APPROVED', comment: 'Faisable en ligne' });
+    expect(production.body.status).toBe('APPROVED');
+    const approved = await db.recipe.findUniqueOrThrow({ where: { id: drafted.body.id } });
+    expect(approved.status).toBe('APPROVED');
+    const previous = await db.recipe.findUniqueOrThrow({ where: { id: source.id } });
+    if (previous.version < approved.version && source.status === 'APPROVED') expect(previous.status).toBe('OBSOLETE');
+
+    const line = await db.productionLine.findFirstOrThrow({ where: { code: 'L1' } });
+    const team = await db.team.findFirstOrThrow({ where: { code: 'PROD-A' } });
+    const milk = await db.product.findFirstOrThrow({ where: { sku: 'PF-STNICOLAS-150' } });
+    const dark = await db.product.findFirstOrThrow({ where: { sku: 'PF-TAB-NOIR72' } });
+    const latest = await db.productionOrder.findFirst({ where: { lineId: line.id, productId: { not: null } }, orderBy: { plannedStart: 'desc' } });
+    const product = latest?.productId === milk.id ? dark : milk;
+    const launchDenied = await request(server).post('/api/v1/production/orders').set('Cookie', emma.cookie).send({
+      recipeId: approved.id, lineId: line.id, teamId: team.id, productId: product.id, plannedQtyKg: 10,
+      plannedStart: new Date().toISOString(), plannedEnd: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+    expect(launchDenied.status).toBe(403);
+    const launched = await request(server).post('/api/v1/production/orders').set('Cookie', secours.cookie).send({
+      recipeId: approved.id, lineId: line.id, teamId: team.id, productId: product.id, plannedQtyKg: 10,
+      plannedStart: new Date().toISOString(), plannedEnd: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+    expect(launched.status, JSON.stringify(launched.body)).toBe(201);
+    expect(launched.body.recipeVersion).toBe(approved.version);
+    const tablet = await request(server).get(`/api/v1/production/orders/${launched.body.id}/sheet`).set('Cookie', emma.cookie);
+    expect(tablet.status, JSON.stringify(tablet.body)).toBe(200);
+    expect(tablet.body.lines).toBeUndefined();
+    expect(tablet.body.steps.length).toBeGreaterThan(0);
+    const blocked = await request(server).post(`/api/v1/production/orders/${launched.body.id}/start`).set('Cookie', secours.cookie).send({});
+    expect(blocked.status, JSON.stringify(blocked.body)).toBe(409);
+    const started = await request(server).post(`/api/v1/production/orders/${launched.body.id}/start`).set('Cookie', secours.cookie).send({ changeover: true });
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    const released = await db.batch.findFirstOrThrow({ where: { status: 'RELEASED', quantity: { gt: 1 } } });
+    const held = await db.batch.create({
+      data: { code: `Q6${Date.now()}`, siteId: employee.siteId, itemId: released.itemId, kind: 'RAW_MATERIAL', quantity: 5, uom: released.uom, status: 'QUARANTINE' },
+    });
+    const refusedLot = await request(server).post(`/api/v1/production/orders/${launched.body.id}/consume`).set('Cookie', emma.cookie).send({ batchCode: held.code, quantity: 0.1 });
+    expect(refusedLot.status).toBe(409);
+    const consumed = await request(server).post(`/api/v1/production/orders/${launched.body.id}/consume`).set('Cookie', emma.cookie).send({ batchCode: released.code, quantity: 0.1 });
+    expect(consumed.status, JSON.stringify(consumed.body)).toBe(200);
+    const made = await request(server).post(`/api/v1/production/orders/${launched.body.id}/output`).set('Cookie', emma.cookie).send({ quantityKg: 1, scrapKg: 0.1 });
+    expect(made.status, JSON.stringify(made.body)).toBe(200);
+    expect(made.body.status).toBe('QUARANTINE');
+    const trace = await request(server).get(`/api/v1/production/batches/${released.id}/downstream`).set('Cookie', emma.cookie);
+    expect(trace.status).toBe(200);
+    expect(trace.body.batches.some((row: { code: string }) => row.code === made.body.code)).toBe(true);
+    const rate = await request(server).get(`/api/v1/production/lines/${line.id}/trs`).set('Cookie', emma.cookie);
+    expect(rate.status, JSON.stringify(rate.body)).toBe(200);
+    expect(typeof rate.body.oee).toBe('number');
+  });
+
+  it('propose une quête d hygiène et refuse la cadence', async () => {
+    const secours = actors.find((actor) => actor.email.startsWith('secours'))!;
+    const emma = actors.find((actor) => actor.email.startsWith('emma'))!;
+    const denied = await request(server).post('/api/v1/production/quests/draw').set('Cookie', emma.cookie).send({ employeeId: emma.employeeId });
+    expect(denied.status).toBe(403);
+    const drawn = await request(server).post('/api/v1/production/quests/draw').set('Cookie', secours.cookie).send({ employeeId: emma.employeeId });
+    expect(drawn.status, JSON.stringify(drawn.body)).toBe(201);
+    if (drawn.body.status === 'ACTIVE') {
+      const done = await request(server).post(`/api/v1/production/quests/${drawn.body.id}/progress`).set('Cookie', emma.cookie).send({ event: 'hygiene_check' });
+      expect(done.status, JSON.stringify(done.body)).toBe(200);
+      expect(done.body.status).toBe('COMPLETED');
+    }
+    const before = await db.quest.findUniqueOrThrow({ where: { id: drawn.body.id } });
+    const speed = await request(server).post(`/api/v1/production/quests/${drawn.body.id}/progress`).set('Cookie', emma.cookie).send({ event: 'output_speed' });
+    expect(speed.status).toBe(409);
+    const after = await db.quest.findUniqueOrThrow({ where: { id: drawn.body.id } });
+    expect(after.progress).toBe(before.progress);
+    expect(after.xpAwarded).toBe(before.xpAwarded);
+  });
+
   it('accueille un visiteur puis clôture un départ', async () => {
     const secours = actors.find((actor) => actor.email.startsWith('secours'))!;
     const emma = actors.find((actor) => actor.email.startsWith('emma'))!;

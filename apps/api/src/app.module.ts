@@ -31,6 +31,8 @@ import { TimeController } from './time/time.controller.js';
 import { TimeDeskService } from './time/desk.service.js';
 import { PayrollService } from './time/payroll.service.js';
 import { TimeService } from './time/time.service.js';
+import { ProductionController } from './production/production.controller.js';
+import { ProductionService } from './production/production.service.js';
 import { WorldController } from './world/world.controller.js';
 import { WorldService } from './world/world.service.js';
 
@@ -38,7 +40,7 @@ const requestBudget = process.env.NODE_ENV === 'test' ? 20_000 : 300;
 
 @Module({
   imports: [PrismaModule, ThrottlerModule.forRoot([{ ttl: 60_000, limit: requestBudget }])],
-  controllers: [HealthController, AuthController, AccountController, ApprovalsController, DevicesController, TimeController, WorldController, AccessDeskController, PeopleController, OrganisationController, ...domainControllers],
+  controllers: [HealthController, AuthController, AccountController, ApprovalsController, DevicesController, TimeController, ProductionController, WorldController, AccessDeskController, PeopleController, OrganisationController, ...domainControllers],
   providers: [
     RedisService,
     AccessService,
@@ -50,6 +52,7 @@ const requestBudget = process.env.NODE_ENV === 'test' ? 20_000 : 300;
     TimeService,
     TimeDeskService,
     PayrollService,
+    ProductionService,
     WorldService,
     CrudService,
     AccessDeskService,

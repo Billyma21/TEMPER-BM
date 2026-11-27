@@ -136,6 +136,7 @@ export class ApprovalsService {
     }
     if (closed && row.policy === 'LEAVE_REQUEST') await this.applyLeave(row.subjectId, accepted);
     if (closed && row.policy === 'TIME_CORRECTION') await this.applyCorrection(row.subjectId, accepted);
+    if (closed && row.policy === 'RECIPE_VERSION') await this.applyRecipe(row.subjectId, accepted);
     return { id: updated.id, status: updated.status, currentStep: updated.currentStep };
   }
 
@@ -231,6 +232,36 @@ export class ApprovalsService {
           absentDays: 0,
         },
       },
+    });
+  }
+
+  /** La double validation qualité puis production rend la version active et classe l ancienne. */
+  private async applyRecipe(id: string, accepted: boolean) {
+    const recipe = await this.prisma.db.recipe.findUnique({ where: { id } });
+    if (!recipe) return;
+    if (!accepted) {
+      await this.prisma.db.recipe.update({ where: { id }, data: { status: 'DRAFT' } });
+      return;
+    }
+    const request = await this.prisma.db.approvalRequest.findFirst({
+      where: { subjectId: id, policy: 'RECIPE_VERSION', status: 'APPROVED' },
+      include: { decisions: true },
+    });
+    const quality = request?.decisions.find((decision) => decision.step === 0)?.deciderUserId;
+    const production = request?.decisions.find((decision) => decision.step === 1)?.deciderUserId ?? request?.decisions.at(-1)?.deciderUserId;
+    await this.prisma.db.recipe.update({
+      where: { id },
+      data: {
+        status: 'APPROVED',
+        qualityApprovedById: quality,
+        qualityApprovedAt: quality ? new Date() : null,
+        productionApprovedById: production,
+        productionApprovedAt: production ? new Date() : null,
+      },
+    });
+    await this.prisma.db.recipe.updateMany({
+      where: { code: recipe.code, status: 'APPROVED', id: { not: id }, version: { lt: recipe.version } },
+      data: { status: 'OBSOLETE' },
     });
   }
 }

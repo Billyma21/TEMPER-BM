@@ -83,6 +83,9 @@ function demoResponse<T>(path: string, init?: RequestInit): T {
   if (path.startsWith('/time/anomalies')) return { items: [] } as T;
   if (path.startsWith('/time/timesheets')) return { items: [] } as T;
   if (path.startsWith('/time/holidays')) return { items: [] } as T;
+  if (path.includes('/sheet')) return { id: '', number: '', status: '', recipeVersion: 0, changeoverRequired: false, steps: [] } as T;
+  if (path.includes('/downstream')) return { batches: [], orders: [], customers: [] } as T;
+  if (path.includes('/trs')) return { lineId: '', date: '', oee: 0, availability: 0 } as T;
   const clean = path.split('?')[0] ?? path;
   if (clean.endsWith('/meta')) return { subject: '', label: '', fields: [] } as T;
   if (clean.endsWith('/audit')) return { items: [] } as T;

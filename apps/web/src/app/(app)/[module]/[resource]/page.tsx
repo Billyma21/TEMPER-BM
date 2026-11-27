@@ -14,6 +14,7 @@ import { ResourceBrowser } from '@/components/bureau/ResourceBrowser';
 import { EvacuationBoard } from '@/components/bureau/EvacuationBoard';
 import { OrgChart } from '@/components/bureau/OrgChart';
 import { HolidayBoard, TimesheetBoard } from '@/components/bureau/PayrollBoards';
+import { LineTablet, TraceBoard } from '@/components/bureau/ProductionBoards';
 import { DayBoard, WeekBoard } from '@/components/bureau/TimeBoards';
 import { VisitorDesk } from '@/components/bureau/VisitorDesk';
 import { subjectFromSegment } from '@/lib/resources';
@@ -40,6 +41,8 @@ function ResourceGate() {
   if (opened && module === 'temps' && resource === 'journee') return <DayBoard />;
   if (opened && module === 'temps' && resource === 'releves') return <TimesheetBoard />;
   if (opened && module === 'temps' && resource === 'feries') return <HolidayBoard />;
+  if (opened && module === 'production' && resource === 'tablette') return <LineTablet />;
+  if (opened && module === 'production' && resource === 'tracabilite') return <TraceBoard />;
   const subject = key ? subjectFromSegment(key, resource) : undefined;
   const allowed = key && subject && me.modules.some((item) => item.key === key) && ability.can('read', subject);
 

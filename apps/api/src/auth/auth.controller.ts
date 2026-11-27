@@ -17,7 +17,7 @@ export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
   @Public()
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Throttle({ default: { limit: process.env.NODE_ENV === 'test' ? 200 : 10, ttl: 60_000 } })
   @Post('login')
   @HttpCode(200)
   async login(@Body(new ZodPipe(LoginSchema)) body: LoginInput, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
