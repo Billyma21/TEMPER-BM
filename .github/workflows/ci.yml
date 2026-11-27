@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verifier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: temper
+          POSTGRES_PASSWORD: temper
+          POSTGRES_DB: temper
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U temper" --health-interval 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://temper:temper@localhost:5432/temper
+      SESSION_SECRET: ci-session-secret
+      FIELD_ENCRYPTION_KEY: ci-field-key
+      BADGE_UID_PEPPER: ci-pepper-value
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Schéma et client Prisma
+        run: pnpm --filter @temper/db exec prisma validate && pnpm --filter @temper/db generate
+      - name: Migrations et données de démonstration
+        run: pnpm --filter @temper/db exec prisma migrate deploy && pnpm db:seed
+      - name: Construction des paquets
+        run: pnpm turbo run build --filter=./packages/*
+      - name: Types
+        run: pnpm turbo run typecheck
+      - name: Tests
+        run: pnpm turbo run test
+      - name: Documentation des droits à jour
+        run: pnpm docs:matrix && git diff --exit-code docs/04-roles-permissions.md
+      - name: Front (mode démo)
+        run: pnpm --filter @temper/web build
+        env:
+          NEXT_PUBLIC_DEMO: '1'
+      - name: Hygiène des livrables
+        run: node scripts/check-deliverables.mjs

@@ -1,0 +1,5 @@
+# Deux approbations exigées sur les zones critiques (protection de branche)
+*                         @Billyma21
+/packages/permissions/    @Billyma21
+/apps/api/src/auth/       @Billyma21
+/packages/db/prisma/      @Billyma21

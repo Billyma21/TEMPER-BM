@@ -1,0 +1,22 @@
+node_modules/
+dist/
+.next/
+out/
+coverage/
+.turbo/
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+packages/db/src/generated/
+playwright-report/
+test-results/
+
+# Outillage poste de travail (jamais versionné)
+.cursor/
+PROMPT_CURSOR.md
+.vscode/
+.idea/
+captures/
+*.tsbuildinfo

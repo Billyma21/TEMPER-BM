@@ -1,0 +1,3929 @@
+// =============================================================================
+// TEMPER : modèle de données
+// Chocolaterie industrielle multi-sites (usine, entrepôts, boutiques, siège).
+//
+// Conventions (voir docs/adr/ADR-004-modele-donnees.md) :
+// - Code en anglais, libellés FR / NL / EN via i18n. Valeurs d'enum en anglais.
+// - Identifiants UUID v7 (triables dans le temps).
+// - Colonnes de périmètre (siteId, departmentId, teamId) DÉNORMALISÉES sur les
+//   enregistrements filtrés par les droits : elles figent l'organisation au moment
+//   de l'événement et permettent un filtrage par index (packages/permissions).
+// - Acteurs (createdById, approvedById, decidedById...) : identifiants d'utilisateur
+//   sans relation Prisma, l'intégrité est assurée par les services et le journal d'audit.
+// - Objets légaux et de traçabilité immuables : jamais de suppression physique,
+//   correction par contre-écriture (StockMovement.reversalOfId, TimeCorrection...).
+// - Montants Decimal(14,2) en EUR, quantités Decimal(14,3), coûts unitaires Decimal(14,4).
+// - Données sensibles (NISS, IBAN) chiffrées applicativement (AES-256-GCM), suffixe Enc.
+//
+// MAAYOUD
+// =============================================================================
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "cjs"
+  importFileExtension = ""
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// =============================================================================
+// 1. ORGANISATION
+// =============================================================================
+
+model Company {
+  id            String   @id @default(uuid(7))
+  legalName     String
+  tradeName     String
+  vatNumber     String   @unique
+  kboNumber     String?  @unique // numéro BCE
+  address       Json
+  country       String   @default("BE")
+  currency      String   @default("EUR")
+  defaultLocale String   @default("fr")
+  logoUrl       String?
+  peppolId      String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sites          Site[]
+  employees      Employee[]
+  positions      Position[]
+  items          Item[]
+  products       Product[]
+  customers      Customer[]
+  suppliers      Supplier[]
+  ledgerAccounts LedgerAccount[]
+  settings       Setting[]
+  leaveTypes     LeaveType[]
+  publicHolidays PublicHoliday[]
+  priceLists     PriceList[]
+  questTemplates QuestTemplate[]
+
+  @@map("companies")
+}
+
+enum SiteKind {
+  FACTORY
+  WAREHOUSE
+  STORE
+  HEADQUARTERS
+  LAB
+  OTHER
+}
+
+model Site {
+  id              String   @id @default(uuid(7))
+  companyId       String
+  code            String   @unique
+  name            String
+  kind            SiteKind
+  address         Json
+  timezone        String   @default("Europe/Brussels")
+  latitude        Decimal? @db.Decimal(9, 6)
+  longitude       Decimal? @db.Decimal(9, 6)
+  geofenceRadiusM Int      @default(150)
+  /// Position du site dans la carte du monde 3D (vue ville)
+  worldX          Float    @default(0)
+  worldZ          Float    @default(0)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company         Company          @relation(fields: [companyId], references: [id])
+  buildings       Building[]
+  departments     Department[]
+  teams           Team[]
+  employees       Employee[]
+  accessZones     AccessZone[]
+  devices         Device[]
+  warehouses      Warehouse[]
+  locations       Location[]
+  productionLines ProductionLine[]
+  machines        Machine[]
+  store           Store?
+
+  @@map("sites")
+}
+
+enum BuildingKind {
+  PRODUCTION
+  WAREHOUSE
+  OFFICE
+  LAB
+  WORKSHOP
+  GATEHOUSE
+  STORE
+  LOADING_DOCK
+  UTILITY
+}
+
+/// Bâtiment : sert au contrôle d'accès ET au rendu du monde 3D
+model Building {
+  id        String       @id @default(uuid(7))
+  siteId    String
+  code      String
+  name      String
+  kind      BuildingKind
+  floors    Int          @default(1)
+  worldX    Float        @default(0)
+  worldZ    Float        @default(0)
+  width     Float        @default(10)
+  depth     Float        @default(10)
+  rotation  Float        @default(0)
+  color     String?
+  createdAt DateTime     @default(now())
+
+  site            Site             @relation(fields: [siteId], references: [id])
+  accessZones     AccessZone[]
+  productionLines ProductionLine[]
+  warehouses      Warehouse[]
+
+  @@unique([siteId, code])
+  @@map("buildings")
+}
+
+model Department {
+  id                String   @id @default(uuid(7))
+  siteId            String
+  parentId          String?
+  code              String
+  name              String
+  costCenter        String?
+  managerEmployeeId String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  site      Site         @relation(fields: [siteId], references: [id])
+  parent    Department?  @relation("DepartmentTree", fields: [parentId], references: [id])
+  children  Department[] @relation("DepartmentTree")
+  teams     Team[]
+  employees Employee[]
+
+  @@unique([siteId, code])
+  @@map("departments")
+}
+
+model Team {
+  id               String   @id @default(uuid(7))
+  siteId           String
+  departmentId     String
+  code             String
+  name             String
+  shiftPatternId   String?
+  leaderEmployeeId String?
+  color            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  site         Site          @relation(fields: [siteId], references: [id])
+  department   Department    @relation(fields: [departmentId], references: [id])
+  shiftPattern ShiftPattern? @relation(fields: [shiftPatternId], references: [id])
+  employees    Employee[]
+
+  @@unique([siteId, code])
+  @@map("teams")
+}
+
+enum WorkerCategory {
+  BLUE_COLLAR // ouvrier
+  WHITE_COLLAR // employé
+  MANAGER // cadre
+}
+
+model Position {
+  id                String         @id @default(uuid(7))
+  companyId         String
+  code              String
+  title             String
+  description       String?
+  jobFamily         String
+  workerCategory    WorkerCategory
+  /// Commission paritaire (ex. 118 industrie alimentaire, 220 employés)
+  jointCommittee    String
+  classification    String?
+  requiredTrainings String[]
+  /// Rôles proposés par défaut lors de l'onboarding (clés de packages/permissions)
+  defaultRoles      String[]
+  isNightWork       Boolean        @default(false)
+  createdAt         DateTime       @default(now())
+
+  company   Company    @relation(fields: [companyId], references: [id])
+  employees Employee[]
+  contracts Contract[]
+
+  @@unique([companyId, code])
+  @@map("positions")
+}
+
+// =============================================================================
+// 2. COMPTES, SÉCURITÉ, ADMINISTRATION
+// =============================================================================
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  LOCKED
+  DISABLED
+}
+
+model User {
+  id                String     @id @default(uuid(7))
+  email             String     @unique
+  passwordHash      String?
+  status            UserStatus @default(INVITED)
+  employeeId        String?    @unique
+  /// Pour les externes : société d'appartenance
+  externalCompany   String?
+  locale            String     @default("fr")
+  theme             String     @default("system")
+  mfaEnabled        Boolean    @default(false)
+  mfaSecretEnc      String?
+  recoveryCodesHash String[]
+  notificationPrefs Json       @default("{}")
+  worldPrefs        Json       @default("{}")
+  failedLoginCount  Int        @default(0)
+  lockedUntil       DateTime?
+  lastLoginAt       DateTime?
+  passwordChangedAt DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+  deletedAt         DateTime?
+
+  employee        Employee?            @relation(fields: [employeeId], references: [id])
+  sessions        Session[]
+  webauthn        WebAuthnCredential[]
+  roleAssignments RoleAssignment[]
+  notifications   Notification[]
+
+  @@map("users")
+}
+
+model Session {
+  id            String    @id @default(uuid(7))
+  userId        String
+  tokenHash     String    @unique
+  ip            String?
+  userAgent     String?
+  mfaVerifiedAt DateTime?
+  lastSeenAt    DateTime  @default(now())
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model WebAuthnCredential {
+  id           String    @id @default(uuid(7))
+  userId       String
+  credentialId String    @unique
+  publicKey    Bytes
+  counter      Int       @default(0)
+  transports   String[]
+  name         String
+  lastUsedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("webauthn_credentials")
+}
+
+enum AssignmentSource {
+  DIRECT
+  DELEGATION
+  BREAK_GLASS
+}
+
+/// Attribution d'un rôle (clé de packages/permissions) à un utilisateur, sur un périmètre et une période
+model RoleAssignment {
+  id                String           @id @default(uuid(7))
+  userId            String
+  role              String
+  /// Site principal (filtrage des droits sur RoleAssignment)
+  siteId            String?
+  siteIds           String[]
+  departmentIds     String[]
+  teamIds           String[]
+  validFrom         DateTime?
+  validUntil        DateTime?
+  source            AssignmentSource @default(DIRECT)
+  delegatedByUserId String?
+  reason            String?
+  approvalRequestId String?
+  createdById       String
+  createdAt         DateTime         @default(now())
+  revokedAt         DateTime?
+  revokedById       String?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([role])
+  @@map("role_assignments")
+}
+
+enum DeviceKind {
+  CLOCK_KIOSK // borne de pointage
+  BADGE_READER // lecteur de porte
+  TOOL_KIOSK // borne outils
+  LINE_TABLET // tablette de ligne
+  ENV_SENSOR // capteur température / humidité
+  POS_REGISTER // caisse
+  LABEL_PRINTER
+  SCALE
+  HANDHELD_SCANNER
+}
+
+enum DeviceStatus {
+  PENDING
+  ACTIVE
+  OFFLINE
+  DISABLED
+}
+
+model Device {
+  id           String       @id @default(uuid(7))
+  siteId       String
+  accessZoneId String?
+  kind         DeviceKind
+  name         String
+  serial       String       @unique
+  /// Empreinte du secret d'appareil (jamais le secret en clair)
+  secretHash   String
+  status       DeviceStatus @default(PENDING)
+  firmware     String?
+  config       Json         @default("{}")
+  lastSeenAt   DateTime?
+  createdAt    DateTime     @default(now())
+
+  site       Site        @relation(fields: [siteId], references: [id])
+  accessZone AccessZone? @relation(fields: [accessZoneId], references: [id])
+
+  @@map("devices")
+}
+
+model ApiKey {
+  id          String    @id @default(uuid(7))
+  name        String
+  prefix      String    @unique
+  hash        String
+  scopes      String[]
+  createdById String
+  expiresAt   DateTime?
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@map("api_keys")
+}
+
+enum ActorType {
+  USER
+  DEVICE
+  SYSTEM
+  API_KEY
+}
+
+/// Journal d'audit append-only, chaîné par empreinte (toute altération casse la chaîne)
+model AuditLog {
+  id           String    @id @default(uuid(7))
+  at           DateTime  @default(now())
+  actorType    ActorType
+  actorId      String?
+  onBehalfOfId String?
+  action       String
+  subject      String
+  subjectId    String?
+  siteId       String?
+  before       Json?
+  after        Json?
+  ip           String?
+  userAgent    String?
+  reason       String?
+  breakGlass   Boolean   @default(false)
+  requestId    String?
+  prevHash     String?
+  hash         String
+
+  @@index([subject, subjectId])
+  @@index([actorId, at])
+  @@index([at])
+  @@map("audit_logs")
+}
+
+model Setting {
+  id          String   @id @default(uuid(7))
+  companyId   String
+  key         String
+  value       Json
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+
+  @@unique([companyId, key])
+  @@map("settings")
+}
+
+enum IntegrationKind {
+  PAYROLL // secrétariat social
+  ACCOUNTING
+  PEPPOL
+  EDI
+  ECOMMERCE
+  SSO
+  IOT_BROKER
+  EMAIL
+  SMS
+  DIMONA
+}
+
+model Integration {
+  id         String          @id @default(uuid(7))
+  kind       IntegrationKind
+  provider   String
+  name       String
+  /// Secrets chiffrés
+  configEnc  String
+  status     String          @default("INACTIVE")
+  lastSyncAt DateTime?
+  lastError  String?
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  @@map("integrations")
+}
+
+enum DataRequestKind {
+  ACCESS
+  RECTIFICATION
+  ERASURE
+  PORTABILITY
+  OBJECTION
+  RESTRICTION
+}
+
+model DataRequest {
+  id              String          @id @default(uuid(7))
+  requesterUserId String
+  kind            DataRequestKind
+  status          String          @default("RECEIVED")
+  details         String?
+  dueAt           DateTime
+  handledById     String?
+  exportFileKey   String?
+  closedAt        DateTime?
+  createdAt       DateTime        @default(now())
+
+  @@map("data_requests")
+}
+
+enum Severity {
+  INFO
+  SUCCESS
+  WARNING
+  CRITICAL
+}
+
+model Notification {
+  id        String    @id @default(uuid(7))
+  userId    String
+  kind      String
+  title     String
+  body      String?
+  link      String?
+  severity  Severity  @default(INFO)
+  channel   String    @default("IN_APP")
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+// =============================================================================
+// 3. RESSOURCES HUMAINES
+// =============================================================================
+
+enum EmployeeStatus {
+  ONBOARDING
+  ACTIVE
+  SUSPENDED
+  LEFT
+}
+
+enum EmploymentType {
+  PERMANENT // CDI
+  FIXED_TERM // CDD
+  TEMPORARY_AGENCY // intérim
+  STUDENT
+  INTERN
+  FLEXI_JOB
+  CONTRACTOR
+}
+
+model Employee {
+  id                    String         @id @default(uuid(7))
+  companyId             String
+  siteId                String
+  departmentId          String?
+  teamId                String?
+  positionId            String?
+  managerId             String?
+  employeeNumber        String         @unique
+  firstName             String
+  lastName              String
+  preferredName         String?
+  birthDate             DateTime?      @db.Date
+  workEmail             String?
+  workPhone             String?
+  personalEmail         String?
+  personalPhone         String?
+  address               Json?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  photoUrl              String?
+  languages             String[]
+  jobTitle              String?
+  hireDate              DateTime       @db.Date
+  seniorityDate         DateTime?      @db.Date
+  endDate               DateTime?      @db.Date
+  status                EmployeeStatus @default(ONBOARDING)
+  employmentType        EmploymentType
+  workerCategory        WorkerCategory
+  jointCommittee        String
+  weeklyHours           Decimal        @db.Decimal(5, 2)
+  /// Apparence de l'avatar dans le monde 3D (couleurs, coiffure) : choisie par l'employé
+  avatar                Json           @default("{}")
+  xp                    Int            @default(0)
+  level                 Int            @default(1)
+  questsEnabled         Boolean        @default(true)
+  /// Apparition nominative dans les classements : consentement explicite
+  leaderboardOptIn      Boolean        @default(false)
+  anonymizedAt          DateTime?
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  company    Company     @relation(fields: [companyId], references: [id])
+  site       Site        @relation(fields: [siteId], references: [id])
+  department Department? @relation(fields: [departmentId], references: [id])
+  team       Team?       @relation(fields: [teamId], references: [id])
+  position   Position?   @relation(fields: [positionId], references: [id])
+  manager    Employee?   @relation("Management", fields: [managerId], references: [id])
+  reports    Employee[]  @relation("Management")
+  user       User?
+
+  payroll          EmployeePayroll?
+  medical          EmployeeMedical?
+  contracts        Contract[]
+  trainings        Training[]
+  documents        EmployeeDocument[]
+  onboardings      Onboarding[]
+  badges           Badge[]
+  timeEntries      TimeEntry[]
+  timeCorrections  TimeCorrection[]
+  schedules        Schedule[]
+  dailyAttendances DailyAttendance[]
+  timesheets       Timesheet[]
+  leaveBalances    LeaveBalance[]
+  leaveRequests    LeaveRequest[]
+  absences         Absence[]
+  toolLoans        ToolLoan[]
+  ppeIssues        Ppe[]
+  quests           Quest[]
+  xpEvents         XpEvent[]
+  achievements     EmployeeAchievement[]
+  expenseReports   ExpenseReport[]
+
+  @@index([siteId, departmentId, teamId])
+  @@index([lastName, firstName])
+  @@map("employees")
+}
+
+/// Données de paie : table séparée, droits séparés, champs chiffrés
+model EmployeePayroll {
+  id                 String   @id @default(uuid(7))
+  employeeId         String   @unique
+  siteId             String
+  departmentId       String?
+  /// Numéro de registre national (NISS), chiffré
+  nissEnc            String?
+  ibanEnc            String?
+  grossMonthly       Decimal? @db.Decimal(14, 2)
+  hourlyRate         Decimal? @db.Decimal(14, 4)
+  payrollProviderRef String?
+  mealVouchers       Boolean  @default(false)
+  ecoCheques         Boolean  @default(false)
+  companyCar         Boolean  @default(false)
+  benefits           Json     @default("{}")
+  updatedAt          DateTime @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@map("employee_payroll")
+}
+
+enum FitnessStatus {
+  FIT
+  FIT_WITH_RESTRICTIONS
+  TEMPORARILY_UNFIT
+  UNFIT
+}
+
+/// Aptitude au poste uniquement (formulaire du médecin du travail). Jamais de diagnostic.
+model EmployeeMedical {
+  id            String        @id @default(uuid(7))
+  employeeId    String        @unique
+  siteId        String
+  fitness       FitnessStatus
+  restrictions  String?
+  riskExposures String[]
+  lastExamAt    DateTime?     @db.Date
+  nextExamAt    DateTime?     @db.Date
+  updatedAt     DateTime      @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@map("employee_medical")
+}
+
+model Contract {
+  id             String         @id @default(uuid(7))
+  employeeId     String
+  siteId         String
+  departmentId   String?
+  positionId     String?
+  type           EmploymentType
+  startDate      DateTime       @db.Date
+  endDate        DateTime?      @db.Date
+  weeklyHours    Decimal        @db.Decimal(5, 2)
+  jointCommittee String
+  status         String         @default("DRAFT")
+  documentKey    String?
+  signedAt       DateTime?
+  createdAt      DateTime       @default(now())
+
+  employee Employee  @relation(fields: [employeeId], references: [id])
+  position Position? @relation(fields: [positionId], references: [id])
+
+  @@index([employeeId])
+  @@map("contracts")
+}
+
+enum TrainingType {
+  FOOD_HYGIENE // hygiène HACCP
+  ALLERGENS
+  SAFETY
+  FORKLIFT // cariste
+  FIRST_AID
+  FIRE_WARDEN
+  MACHINE
+  LOTO // consignation
+  ONBOARDING
+  OTHER
+}
+
+model Training {
+  id             String       @id @default(uuid(7))
+  employeeId     String
+  siteId         String
+  departmentId   String?
+  teamId         String?
+  type           TrainingType
+  title          String
+  provider       String?
+  status         String       @default("PLANNED")
+  scheduledAt    DateTime?
+  completedAt    DateTime?
+  validUntil     DateTime?
+  score          Int?
+  certificateKey String?
+  createdAt      DateTime     @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@index([employeeId, type])
+  @@index([validUntil])
+  @@map("trainings")
+}
+
+model EmployeeDocument {
+  id             String    @id @default(uuid(7))
+  employeeId     String
+  siteId         String
+  departmentId   String?
+  category       String
+  title          String
+  fileKey        String
+  mimeType       String
+  size           Int
+  retentionUntil DateTime?
+  uploadedById   String
+  createdAt      DateTime  @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@map("employee_documents")
+}
+
+model Onboarding {
+  id           String    @id @default(uuid(7))
+  employeeId   String
+  siteId       String
+  departmentId String?
+  kind         String // ARRIVAL | DEPARTURE
+  status       String    @default("OPEN")
+  dueDate      DateTime  @db.Date
+  /// Étapes : compte, rôles, badge, EPI, formations hygiène/sécurité, Dimona, matériel, restitutions
+  checklist    Json
+  completedAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@map("onboardings")
+}
+
+// =============================================================================
+// 4. BADGES ET CONTRÔLE D'ACCÈS
+// =============================================================================
+
+enum BadgeTech {
+  MIFARE_DESFIRE
+  HID_ICLASS
+  QR
+  MOBILE_NFC
+}
+
+enum BadgeKind {
+  PERMANENT
+  TEMPORARY
+  VISITOR
+  CONTRACTOR
+}
+
+enum BadgeStatus {
+  ACTIVE
+  SUSPENDED
+  LOST
+  STOLEN
+  RETURNED
+  EXPIRED
+}
+
+model Badge {
+  id               String      @id @default(uuid(7))
+  holderEmployeeId String?
+  visitorId        String?
+  siteId           String
+  teamId           String?
+  /// HMAC-SHA256(UID, pepper) : l'UID brut n'est jamais stocké
+  uidHash          String      @unique
+  uidLast4         String
+  technology       BadgeTech
+  kind             BadgeKind
+  status           BadgeStatus @default(ACTIVE)
+  /// PIN de secours à la borne (haché)
+  pinHash          String?
+  validFrom        DateTime    @default(now())
+  validUntil       DateTime?
+  issuedById       String
+  issuedAt         DateTime    @default(now())
+  returnedAt       DateTime?
+
+  holder  Employee? @relation(fields: [holderEmployeeId], references: [id])
+  visitor Visitor?  @relation(fields: [visitorId], references: [id])
+
+  @@index([holderEmployeeId])
+  @@map("badges")
+}
+
+enum ZoneLevel {
+  PUBLIC
+  STANDARD
+  RESTRICTED
+  CRITICAL
+}
+
+enum HygieneLevel {
+  NONE
+  HYGIENE // charlotte, blouse, lavage des mains
+  HIGH_HYGIENE // sas, surchaussures, zones produits nus
+}
+
+model AccessZone {
+  id                    String         @id @default(uuid(7))
+  siteId                String
+  buildingId            String?
+  code                  String
+  name                  String
+  level                 ZoneLevel
+  hygieneLevel          HygieneLevel   @default(NONE)
+  /// Formations valides exigées pour entrer (ex. FOOD_HYGIENE en zone production)
+  requiredTrainingTypes TrainingType[]
+  requiredPpe           String[]
+  maxOccupancy          Int?
+  antiPassback          Boolean        @default(false)
+  /// Contour de la zone dans le monde 3D
+  worldPolygon          Json?
+  createdAt             DateTime       @default(now())
+
+  site     Site         @relation(fields: [siteId], references: [id])
+  building Building?    @relation(fields: [buildingId], references: [id])
+  rules    AccessRule[]
+  devices  Device[]
+
+  @@unique([siteId, code])
+  @@map("access_zones")
+}
+
+model AccessRule {
+  id         String    @id @default(uuid(7))
+  siteId     String
+  zoneId     String
+  roleKey    String?
+  positionId String?
+  teamId     String?
+  employeeId String?
+  /// Créneaux : [{ days: [1..7], from: "05:30", to: "22:30" }]
+  schedule   Json?
+  allow      Boolean   @default(true)
+  validFrom  DateTime?
+  validUntil DateTime?
+  createdAt  DateTime  @default(now())
+
+  zone AccessZone @relation(fields: [zoneId], references: [id])
+
+  @@map("access_rules")
+}
+
+enum AccessDirection {
+  IN
+  OUT
+}
+
+enum AccessResult {
+  GRANTED
+  DENIED
+}
+
+enum DenyReason {
+  UNKNOWN_BADGE
+  BADGE_INACTIVE
+  OUT_OF_SCHEDULE
+  NO_RIGHT
+  TRAINING_EXPIRED
+  MEDICAL_RESTRICTION
+  ANTI_PASSBACK
+  ZONE_FULL
+  DEVICE_OFFLINE
+}
+
+/// Journal des passages, append-only. Volume élevé : partitionnement mensuel recommandé.
+model AccessEvent {
+  id         String          @id @default(uuid(7))
+  at         DateTime
+  siteId     String
+  zoneId     String?
+  deviceId   String?
+  badgeId    String?
+  employeeId String?
+  visitorId  String?
+  direction  AccessDirection
+  result     AccessResult
+  denyReason DenyReason?
+  createdAt  DateTime        @default(now())
+
+  @@index([siteId, at])
+  @@index([employeeId, at])
+  @@index([zoneId, at])
+  @@map("access_events")
+}
+
+enum VisitorStatus {
+  EXPECTED
+  ON_SITE
+  LEFT
+  CANCELLED
+  NO_SHOW
+}
+
+model Visitor {
+  id                   String        @id @default(uuid(7))
+  siteId               String
+  hostEmployeeId       String
+  firstName            String
+  lastName             String
+  company              String?
+  email                String?
+  phone                String?
+  purpose              String
+  expectedAt           DateTime
+  arrivedAt            DateTime?
+  leftAt               DateTime?
+  status               VisitorStatus @default(EXPECTED)
+  safetyBriefingAt     DateTime?
+  /// Déclaration d'absence de symptômes avant zone alimentaire (oui/non, sans détail)
+  hygieneDeclarationAt DateTime?
+  ndaSignedAt          DateTime?
+  vehiclePlate         String?
+  consentAt            DateTime?
+  retentionUntil       DateTime
+  createdAt            DateTime      @default(now())
+
+  badges Badge[]
+
+  @@index([siteId, expectedAt])
+  @@map("visitors")
+}
+
+// =============================================================================
+// 5. TEMPS ET PRÉSENCES
+// =============================================================================
+
+model ShiftPattern {
+  id           String   @id @default(uuid(7))
+  siteId       String
+  code         String
+  name         String
+  /// Heures locales "HH:mm"
+  startTime    String
+  endTime      String
+  breakMinutes Int      @default(30)
+  isNight      Boolean  @default(false)
+  /// Rotation 3x8 : séquence de semaines
+  rotation     Json?
+  color        String?
+  createdAt    DateTime @default(now())
+
+  teams     Team[]
+  schedules Schedule[]
+
+  @@unique([siteId, code])
+  @@map("shift_patterns")
+}
+
+enum ScheduleStatus {
+  DRAFT
+  PUBLISHED
+  CHANGED
+  CANCELLED
+}
+
+model Schedule {
+  id               String         @id @default(uuid(7))
+  employeeId       String
+  siteId           String
+  departmentId     String?
+  teamId           String?
+  date             DateTime       @db.Date
+  shiftPatternId   String?
+  productionLineId String?
+  plannedStart     DateTime
+  plannedEnd       DateTime
+  plannedBreakMin  Int            @default(30)
+  status           ScheduleStatus @default(DRAFT)
+  publishedAt      DateTime?
+  createdById      String
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  employee     Employee      @relation(fields: [employeeId], references: [id])
+  shiftPattern ShiftPattern? @relation(fields: [shiftPatternId], references: [id])
+
+  @@unique([employeeId, plannedStart])
+  @@index([siteId, date])
+  @@index([teamId, date])
+  @@map("schedules")
+}
+
+enum ClockKind {
+  IN
+  OUT
+  BREAK_START
+  BREAK_END
+  MISSION_START
+  MISSION_END
+}
+
+enum ClockSource {
+  BADGE
+  KIOSK_PIN
+  MOBILE
+  WEB
+  IMPORT
+}
+
+/// Pointage brut, immuable. Les corrections passent par TimeCorrection.
+model TimeEntry {
+  id            String      @id @default(uuid(7))
+  employeeId    String
+  siteId        String
+  departmentId  String?
+  teamId        String?
+  at            DateTime
+  kind          ClockKind
+  source        ClockSource
+  deviceId      String?
+  badgeId       String?
+  latitude      Decimal?    @db.Decimal(9, 6)
+  longitude     Decimal?    @db.Decimal(9, 6)
+  accuracyM     Int?
+  /// Pointé hors connexion puis synchronisé
+  isOffline     Boolean     @default(false)
+  /// Identifiant généré par la borne : garantit l'idempotence des synchronisations
+  clientEventId String      @unique
+  receivedAt    DateTime    @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@index([employeeId, at])
+  @@index([siteId, at])
+  @@index([teamId, at])
+  @@map("time_entries")
+}
+
+enum DecisionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model TimeCorrection {
+  id                String         @id @default(uuid(7))
+  employeeId        String
+  siteId            String
+  departmentId      String?
+  teamId            String?
+  date              DateTime       @db.Date
+  /// ADD | VOID | MOVE
+  kind              String
+  targetTimeEntryId String?
+  proposedAt        DateTime?
+  proposedKind      ClockKind?
+  reason            String
+  status            DecisionStatus @default(PENDING)
+  requestedById     String
+  decidedById       String?
+  decidedAt         DateTime?
+  decisionComment   String?
+  createdAt         DateTime       @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@index([teamId, status])
+  @@map("time_corrections")
+}
+
+enum AttendanceStatus {
+  OK
+  ANOMALY
+  CORRECTED
+  VALIDATED
+}
+
+/// Journée calculée (moteur de règles de temps) à partir des pointages, du planning et des absences
+model DailyAttendance {
+  id                String           @id @default(uuid(7))
+  employeeId        String
+  siteId            String
+  departmentId      String?
+  teamId            String?
+  date              DateTime         @db.Date
+  scheduleId        String?
+  firstIn           DateTime?
+  lastOut           DateTime?
+  workedMinutes     Int              @default(0)
+  breakMinutes      Int              @default(0)
+  overtimeMinutes   Int              @default(0)
+  nightMinutes      Int              @default(0)
+  sundayMinutes     Int              @default(0)
+  holidayMinutes    Int              @default(0)
+  lateMinutes       Int              @default(0)
+  earlyLeaveMinutes Int              @default(0)
+  /// MISSING_OUT, NO_SCHEDULE, SHORT_BREAK, REST_UNDER_11H, OVER_DAILY_LIMIT, OVER_WEEKLY_LIMIT...
+  anomalies         String[]
+  status            AttendanceStatus @default(OK)
+  computedAt        DateTime         @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@unique([employeeId, date])
+  @@index([siteId, date])
+  @@index([teamId, date, status])
+  @@map("daily_attendances")
+}
+
+enum TimesheetStatus {
+  OPEN
+  SUBMITTED
+  MANAGER_APPROVED
+  PAYROLL_APPROVED
+  EXPORTED
+  LOCKED
+}
+
+model Timesheet {
+  id                  String          @id @default(uuid(7))
+  employeeId          String
+  siteId              String
+  departmentId        String?
+  teamId              String?
+  periodStart         DateTime        @db.Date
+  periodEnd           DateTime        @db.Date
+  totals              Json
+  status              TimesheetStatus @default(OPEN)
+  managerApprovedById String?
+  managerApprovedAt   DateTime?
+  payrollApprovedById String?
+  payrollApprovedAt   DateTime?
+  payrollExportId     String?
+  lockedAt            DateTime?
+
+  employee      Employee       @relation(fields: [employeeId], references: [id])
+  payrollExport PayrollExport? @relation(fields: [payrollExportId], references: [id])
+
+  @@unique([employeeId, periodStart])
+  @@map("timesheets")
+}
+
+model LeaveType {
+  id               String  @id @default(uuid(7))
+  companyId        String
+  /// LEGAL_HOLIDAY, EXTRA_HOLIDAY, RECOVERY_DAY (ADV/RTT), SHORT_LEAVE (petit chômage),
+  /// EDUCATION_LEAVE, TIME_CREDIT, UNPAID, PARENTAL...
+  code             String
+  label            Json
+  paid             Boolean @default(true)
+  deductsBalance   Boolean @default(true)
+  requiresDocument Boolean @default(false)
+  color            String?
+
+  company       Company        @relation(fields: [companyId], references: [id])
+  balances      LeaveBalance[]
+  leaveRequests LeaveRequest[]
+
+  @@unique([companyId, code])
+  @@map("leave_types")
+}
+
+model LeaveBalance {
+  id              String  @id @default(uuid(7))
+  employeeId      String
+  siteId          String
+  departmentId    String?
+  teamId          String?
+  leaveTypeId     String
+  year            Int
+  entitledDays    Decimal @db.Decimal(6, 2)
+  takenDays       Decimal @default(0) @db.Decimal(6, 2)
+  plannedDays     Decimal @default(0) @db.Decimal(6, 2)
+  carriedOverDays Decimal @default(0) @db.Decimal(6, 2)
+
+  employee  Employee  @relation(fields: [employeeId], references: [id])
+  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id])
+
+  @@unique([employeeId, leaveTypeId, year])
+  @@map("leave_balances")
+}
+
+model LeaveRequest {
+  id           String         @id @default(uuid(7))
+  employeeId   String
+  siteId       String
+  departmentId String?
+  teamId       String?
+  leaveTypeId  String
+  startDate    DateTime       @db.Date
+  endDate      DateTime       @db.Date
+  /// AM | PM : demi-journées
+  startHalf    String?
+  endHalf      String?
+  days         Decimal        @db.Decimal(6, 2)
+  comment      String?
+  status       DecisionStatus @default(PENDING)
+  approvalId   String?
+  createdAt    DateTime       @default(now())
+  decidedAt    DateTime?
+
+  employee  Employee  @relation(fields: [employeeId], references: [id])
+  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id])
+
+  @@index([teamId, status])
+  @@index([employeeId, startDate])
+  @@map("leave_requests")
+}
+
+enum AbsenceType {
+  SICKNESS
+  WORK_ACCIDENT
+  COMMUTE_ACCIDENT
+  PRIVATE_ACCIDENT
+  UNJUSTIFIED
+  FORCE_MAJEURE
+  OTHER
+}
+
+/// Absence : jamais de motif médical, uniquement le type et le justificatif
+model Absence {
+  id                    String      @id @default(uuid(7))
+  employeeId            String
+  siteId                String
+  departmentId          String?
+  teamId                String?
+  type                  AbsenceType
+  startDate             DateTime    @db.Date
+  endDate               DateTime?   @db.Date
+  notifiedAt            DateTime    @default(now())
+  certificateKey        String?
+  certificateReceivedAt DateTime?
+  incidentId            String?
+  status                String      @default("OPEN")
+  comment               String?
+  createdAt             DateTime    @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@index([teamId, startDate])
+  @@map("absences")
+}
+
+model PublicHoliday {
+  id            String   @id @default(uuid(7))
+  companyId     String
+  date          DateTime @db.Date
+  label         String
+  /// Jour de remplacement si le férié tombe un dimanche ou un jour de repos
+  isReplacement Boolean  @default(false)
+
+  company Company @relation(fields: [companyId], references: [id])
+
+  @@unique([companyId, date])
+  @@map("public_holidays")
+}
+
+enum ExportStatus {
+  DRAFT
+  GENERATED
+  SENT
+  ACKNOWLEDGED
+  FAILED
+}
+
+model PayrollExport {
+  id            String       @id @default(uuid(7))
+  siteId        String
+  provider      String
+  periodStart   DateTime     @db.Date
+  periodEnd     DateTime     @db.Date
+  status        ExportStatus @default(DRAFT)
+  fileKey       String?
+  checksum      String?
+  lineCount     Int          @default(0)
+  generatedById String
+  sentAt        DateTime?
+  error         String?
+  createdAt     DateTime     @default(now())
+
+  timesheets Timesheet[]
+
+  @@map("payroll_exports")
+}
+
+// =============================================================================
+// 6. PRODUITS, RECETTES, PRODUCTION
+// =============================================================================
+
+enum ProductRange {
+  TABLET
+  PRALINE
+  BAR
+  SPREAD
+  POWDER
+  SEASONAL_MOULDING
+  COUVERTURE // chocolat de couverture B2B
+  GIFT_BOX
+}
+
+enum Season {
+  PERMANENT
+  EASTER
+  SAINT_NICHOLAS
+  CHRISTMAS
+  VALENTINE
+}
+
+enum ProductStatus {
+  DEVELOPMENT
+  ACTIVE
+  DISCONTINUED
+}
+
+model Product {
+  id                String        @id @default(uuid(7))
+  companyId         String
+  sku               String        @unique
+  gtin              String?       @unique
+  itemId            String        @unique
+  name              String
+  marketingName     String?
+  description       String?
+  range             ProductRange
+  season            Season        @default(PERMANENT)
+  cocoaPercent      Decimal?      @db.Decimal(5, 2)
+  netWeightG        Int
+  shelfLifeDays     Int
+  storageConditions String        @default("Conserver au sec entre 15 et 18 °C")
+  /// Valeurs nutritionnelles pour 100 g (règlement INCO)
+  nutrition         Json
+  /// Liste d'ingrédients par langue { fr, nl, en, de }
+  ingredientsText   Json
+  claims            String[]
+  images            String[]
+  translations      Json          @default("{}")
+  status            ProductStatus @default(DEVELOPMENT)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  deletedAt         DateTime?
+
+  company          Company           @relation(fields: [companyId], references: [id])
+  item             Item              @relation(fields: [itemId], references: [id])
+  allergens        ProductAllergen[]
+  recipes          Recipe[]
+  forecasts        DemandForecast[]
+  productionOrders ProductionOrder[]
+  priceLines       PriceListLine[]
+  costSheets       CostSheet[]
+
+  @@map("products")
+}
+
+model Allergen {
+  id     String @id @default(uuid(7))
+  /// MILK, NUTS, PEANUTS, SOY, GLUTEN, EGG, SESAME, LUPIN, SULPHITES...
+  code   String @unique
+  labels Json
+
+  products ProductAllergen[]
+  items    ItemAllergen[]
+
+  @@map("allergens")
+}
+
+enum AllergenPresence {
+  CONTAINS
+  MAY_CONTAIN // traces possibles
+}
+
+model ProductAllergen {
+  productId  String
+  allergenId String
+  presence   AllergenPresence
+
+  product  Product  @relation(fields: [productId], references: [id])
+  allergen Allergen @relation(fields: [allergenId], references: [id])
+
+  @@id([productId, allergenId])
+  @@map("product_allergens")
+}
+
+model ItemAllergen {
+  itemId     String
+  allergenId String
+  presence   AllergenPresence
+
+  item     Item     @relation(fields: [itemId], references: [id])
+  allergen Allergen @relation(fields: [allergenId], references: [id])
+
+  @@id([itemId, allergenId])
+  @@map("item_allergens")
+}
+
+enum RecipeStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  OBSOLETE
+}
+
+/// Recette : secret de fabrication, versionnée, double validation qualité + production
+model Recipe {
+  id                     String       @id @default(uuid(7))
+  code                   String
+  name                   String
+  productId              String?
+  version                Int
+  status                 RecipeStatus @default(DRAFT)
+  yieldKg                Decimal      @db.Decimal(14, 3)
+  durationMinutes        Int
+  notes                  String?
+  supersedesId           String?
+  qualityApprovedById    String?
+  qualityApprovedAt      DateTime?
+  productionApprovedById String?
+  productionApprovedAt   DateTime?
+  createdById            String
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+
+  product          Product?          @relation(fields: [productId], references: [id])
+  lines            RecipeLine[]
+  steps            RecipeStep[]
+  productionOrders ProductionOrder[]
+
+  @@unique([code, version])
+  @@map("recipes")
+}
+
+model RecipeLine {
+  id          String  @id @default(uuid(7))
+  recipeId    String
+  itemId      String
+  quantity    Decimal @db.Decimal(14, 4)
+  uom         Uom
+  lossPercent Decimal @default(0) @db.Decimal(5, 2)
+  phase       String?
+  sortOrder   Int
+
+  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  item   Item   @relation(fields: [itemId], references: [id])
+
+  @@map("recipe_lines")
+}
+
+enum Operation {
+  CLEANING_SORTING // tri, nettoyage des fèves
+  ROASTING
+  WINNOWING // concassage, vannage
+  GRINDING
+  PRESSING
+  MIXING
+  REFINING
+  CONCHING
+  TEMPERING
+  MOULDING
+  ENROBING
+  COOLING
+  DEMOULDING
+  PACKAGING
+  METAL_DETECTION
+  QUALITY_CHECK
+}
+
+/// Gamme opératoire : paramètres cibles et points critiques (CCP)
+model RecipeStep {
+  id              String    @id @default(uuid(7))
+  recipeId        String
+  sequence        Int
+  operation       Operation
+  machineType     String?
+  durationMinutes Int
+  /// { temperatureC: { min, target, max }, speedRpm, humidityPct, ... }
+  targetParams    Json
+  isCcp           Boolean   @default(false)
+  ccpCode         String?
+  instructions    String?
+
+  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@unique([recipeId, sequence])
+  @@map("recipe_steps")
+}
+
+model DemandForecast {
+  id          String   @id @default(uuid(7))
+  productId   String
+  siteId      String?
+  periodStart DateTime @db.Date
+  periodEnd   DateTime @db.Date
+  quantity    Decimal  @db.Decimal(14, 3)
+  /// HISTORY | SALES_INPUT | PROMOTION | MANUAL
+  source      String
+  version     Int      @default(1)
+  createdById String
+  createdAt   DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([productId, periodStart])
+  @@map("demand_forecasts")
+}
+
+model ProductionLine {
+  id             String   @id @default(uuid(7))
+  siteId         String
+  buildingId     String?
+  code           String
+  name           String
+  kind           String
+  nominalRateKgH Decimal  @db.Decimal(10, 2)
+  status         String   @default("IDLE")
+  worldX         Float    @default(0)
+  worldZ         Float    @default(0)
+  rotation       Float    @default(0)
+  createdAt      DateTime @default(now())
+
+  site             Site              @relation(fields: [siteId], references: [id])
+  building         Building?         @relation(fields: [buildingId], references: [id])
+  machines         Machine[]
+  productionOrders ProductionOrder[]
+  oeeSnapshots     OeeSnapshot[]
+
+  @@unique([siteId, code])
+  @@map("production_lines")
+}
+
+enum MachineStatus {
+  RUNNING
+  IDLE
+  BREAKDOWN
+  MAINTENANCE
+  CLEANING
+  OUT_OF_SERVICE
+}
+
+model Machine {
+  id           String        @id @default(uuid(7))
+  siteId       String
+  lineId       String?
+  code         String
+  name         String
+  /// ROASTER, GRINDER, CONCHE, TEMPERING_MACHINE, MOULDING_LINE, ENROBER, COOLING_TUNNEL, PACKER, METAL_DETECTOR...
+  type         String
+  manufacturer String?
+  model        String?
+  serial       String?
+  installedAt  DateTime?
+  status       MachineStatus @default(IDLE)
+  /// A : arrêt = arrêt de ligne ; B : impact partiel ; C : sans impact
+  criticality  String        @default("B")
+  meterHours   Int           @default(0)
+  meterCycles  Int           @default(0)
+  location     String?
+  /// Sujet MQTT des télémesures (température, vitesse, état)
+  iotTopic     String?
+  worldX       Float         @default(0)
+  worldZ       Float         @default(0)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  site             Site              @relation(fields: [siteId], references: [id])
+  line             ProductionLine?   @relation(fields: [lineId], references: [id])
+  maintenancePlans MaintenancePlan[]
+  workOrders       WorkOrder[]
+  downtimes        Downtime[]
+
+  @@unique([siteId, code])
+  @@map("machines")
+}
+
+model ProductionPlan {
+  id          String    @id @default(uuid(7))
+  siteId      String
+  periodStart DateTime  @db.Date
+  periodEnd   DateTime  @db.Date
+  /// DRAFT | PUBLISHED | FROZEN
+  status      String    @default("DRAFT")
+  version     Int       @default(1)
+  notes       String?
+  createdById String
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  orders ProductionOrder[]
+
+  @@map("production_plans")
+}
+
+enum ProductionOrderStatus {
+  PLANNED
+  RELEASED
+  IN_PROGRESS
+  PAUSED
+  COMPLETED
+  CLOSED
+  CANCELLED
+}
+
+enum ProductionOrderKind {
+  STANDARD
+  TRIAL
+  REWORK
+}
+
+model ProductionOrder {
+  id            String                @id @default(uuid(7))
+  number        String                @unique
+  siteId        String
+  teamId        String?
+  lineId        String?
+  planId        String?
+  productId     String?
+  recipeId      String
+  recipeVersion Int
+  kind          ProductionOrderKind   @default(STANDARD)
+  plannedQtyKg  Decimal               @db.Decimal(14, 3)
+  producedQtyKg Decimal               @default(0) @db.Decimal(14, 3)
+  scrapQtyKg    Decimal               @default(0) @db.Decimal(14, 3)
+  plannedStart  DateTime
+  plannedEnd    DateTime
+  actualStart   DateTime?
+  actualEnd     DateTime?
+  status        ProductionOrderStatus @default(PLANNED)
+  priority      Int                   @default(3)
+  salesOrderId  String?
+  notes         String?
+  createdById   String
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  line      ProductionLine?  @relation(fields: [lineId], references: [id])
+  plan      ProductionPlan?  @relation(fields: [planId], references: [id])
+  product   Product?         @relation(fields: [productId], references: [id])
+  recipe    Recipe           @relation(fields: [recipeId], references: [id])
+  steps     ProductionStep[]
+  batches   Batch[]
+  downtimes Downtime[]
+
+  @@index([siteId, status, plannedStart])
+  @@index([teamId, status])
+  @@map("production_orders")
+}
+
+model ProductionStep {
+  id                  String    @id @default(uuid(7))
+  orderId             String
+  siteId              String
+  teamId              String?
+  sequence            Int
+  operation           Operation
+  machineId           String?
+  /// TODO | IN_PROGRESS | DONE | BLOCKED
+  status              String    @default("TODO")
+  startedAt           DateTime?
+  endedAt             DateTime?
+  operatorEmployeeIds String[]
+  measuredParams      Json      @default("{}")
+  qtyInKg             Decimal?  @db.Decimal(14, 3)
+  qtyOutKg            Decimal?  @db.Decimal(14, 3)
+  comment             String?
+
+  order ProductionOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, sequence])
+  @@map("production_steps")
+}
+
+enum BatchKind {
+  RAW_MATERIAL
+  INTERMEDIATE
+  FINISHED_GOOD
+}
+
+enum BatchStatus {
+  IN_PRODUCTION
+  QUARANTINE
+  RELEASED
+  BLOCKED
+  RECALLED
+  CONSUMED
+  DESTROYED
+}
+
+/// Lot : pivot de la traçabilité amont (fèves) et aval (clients)
+model Batch {
+  id                 String      @id @default(uuid(7))
+  code               String      @unique
+  siteId             String
+  itemId             String
+  orderId            String?
+  kind               BatchKind
+  quantity           Decimal     @db.Decimal(14, 3)
+  uom                Uom
+  producedAt         DateTime?
+  receivedAt         DateTime?
+  /// Date de durabilité minimale (DDM)
+  bestBefore         DateTime?   @db.Date
+  status             BatchStatus @default(QUARANTINE)
+  supplierId         String?
+  supplierLotCode    String?
+  goodsReceiptLineId String?
+  /// Pays et coopérative d'origine (fèves)
+  origin             Json?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  item      Item             @relation(fields: [itemId], references: [id])
+  order     ProductionOrder? @relation(fields: [orderId], references: [id])
+  parents   BatchGenealogy[] @relation("Child")
+  children  BatchGenealogy[] @relation("Parent")
+  stockLots StockLot[]
+  releases  BatchRelease[]
+  recalls   RecallBatch[]
+
+  @@index([itemId, status])
+  @@map("batches")
+}
+
+model BatchGenealogy {
+  id            String  @id @default(uuid(7))
+  parentBatchId String
+  childBatchId  String
+  quantity      Decimal @db.Decimal(14, 3)
+  orderId       String?
+
+  parent Batch @relation("Parent", fields: [parentBatchId], references: [id])
+  child  Batch @relation("Child", fields: [childBatchId], references: [id])
+
+  @@unique([parentBatchId, childBatchId])
+  @@map("batch_genealogy")
+}
+
+enum DowntimeCategory {
+  BREAKDOWN
+  CHANGEOVER
+  CLEANING
+  MATERIAL_SHORTAGE
+  STAFF_SHORTAGE
+  QUALITY_HOLD
+  MICRO_STOP
+  PLANNED
+}
+
+model Downtime {
+  id                   String           @id @default(uuid(7))
+  siteId               String
+  teamId               String?
+  machineId            String?
+  lineId               String?
+  orderId              String?
+  category             DowntimeCategory
+  startedAt            DateTime
+  endedAt              DateTime?
+  reason               String?
+  declaredByEmployeeId String?
+  workOrderId          String?
+
+  machine Machine?         @relation(fields: [machineId], references: [id])
+  order   ProductionOrder? @relation(fields: [orderId], references: [id])
+
+  @@index([siteId, startedAt])
+  @@map("downtimes")
+}
+
+/// Instantané TRS par ligne et par poste : alimente le pilotage et le monde 3D
+model OeeSnapshot {
+  id             String   @id @default(uuid(7))
+  siteId         String
+  lineId         String
+  date           DateTime @db.Date
+  shift          String
+  plannedMinutes Int
+  runMinutes     Int
+  goodQtyKg      Decimal  @db.Decimal(14, 3)
+  totalQtyKg     Decimal  @db.Decimal(14, 3)
+  availability   Decimal  @db.Decimal(5, 4)
+  performance    Decimal  @db.Decimal(5, 4)
+  quality        Decimal  @db.Decimal(5, 4)
+  oee            Decimal  @db.Decimal(5, 4)
+  computedAt     DateTime @default(now())
+
+  line ProductionLine @relation(fields: [lineId], references: [id])
+
+  @@unique([lineId, date, shift])
+  @@map("oee_snapshots")
+}
+
+// =============================================================================
+// 7. QUALITÉ ET SÉCURITÉ ALIMENTAIRE
+// =============================================================================
+
+model HaccpPlan {
+  id           String    @id @default(uuid(7))
+  siteId       String
+  version      Int
+  /// DRAFT | APPROVED | SUPERSEDED
+  status       String    @default("DRAFT")
+  scope        String
+  approvedById String?
+  approvedAt   DateTime?
+  reviewDueAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  ccps HaccpCcp[]
+
+  @@unique([siteId, version])
+  @@map("haccp_plans")
+}
+
+model HaccpCcp {
+  id               String     @id @default(uuid(7))
+  planId           String
+  code             String
+  name             String
+  hazard           String
+  /// { min, max, unit } ou règle (ex. détection métaux : rejet effectif des témoins Fe 1.5 mm)
+  criticalLimits   Json
+  monitoring       String
+  frequency        String
+  correctiveAction String
+  operation        Operation?
+
+  plan   HaccpPlan      @relation(fields: [planId], references: [id], onDelete: Cascade)
+  checks QualityCheck[]
+
+  @@map("haccp_ccps")
+}
+
+enum CheckKind {
+  CCP
+  PRP // programme prérequis
+  RECEPTION
+  IN_LINE
+  FINISHED_PRODUCT
+  ENVIRONMENT
+  CLEANING
+  PEST_CONTROL
+  ALLERGEN_CHANGEOVER
+}
+
+enum CheckResult {
+  PASS
+  FAIL
+  WATCH
+}
+
+model QualityCheck {
+  id                    String      @id @default(uuid(7))
+  siteId                String
+  kind                  CheckKind
+  ccpId                 String?
+  batchId               String?
+  orderId               String?
+  machineId             String?
+  goodsReceiptId        String?
+  performedByEmployeeId String
+  performedAt           DateTime    @default(now())
+  values                Json
+  result                CheckResult
+  comment               String?
+  attachments           String[]
+  nonConformityId       String?
+
+  ccp HaccpCcp? @relation(fields: [ccpId], references: [id])
+
+  @@index([siteId, performedAt])
+  @@index([batchId])
+  @@map("quality_checks")
+}
+
+enum NcSeverity {
+  MINOR
+  MAJOR
+  CRITICAL
+}
+
+model NonConformity {
+  id                   String     @id @default(uuid(7))
+  number               String     @unique
+  siteId               String
+  /// INTERNAL | SUPPLIER | CUSTOMER | AUDIT | HACCP
+  source               String
+  severity             NcSeverity
+  title                String
+  description          String
+  batchId              String?
+  supplierId           String?
+  customerId           String?
+  productId            String?
+  reportedByEmployeeId String
+  reportedAt           DateTime   @default(now())
+  /// OPEN | ANALYSIS | ACTION | VERIFICATION | CLOSED
+  status               String     @default("OPEN")
+  rootCause            String?
+  closedAt             DateTime?
+  closedById           String?
+
+  capas Capa[]
+
+  @@index([siteId, status])
+  @@map("non_conformities")
+}
+
+model Capa {
+  id                 String    @id @default(uuid(7))
+  siteId             String
+  nonConformityId    String?
+  /// CORRECTIVE | PREVENTIVE
+  kind               String
+  title              String
+  description        String
+  ownerEmployeeId    String
+  dueDate            DateTime  @db.Date
+  /// TODO | IN_PROGRESS | TO_VERIFY | EFFECTIVE | NOT_EFFECTIVE
+  status             String    @default("TODO")
+  effectivenessCheck String?
+  verifiedById       String?
+  verifiedAt         DateTime?
+  createdAt          DateTime  @default(now())
+
+  nonConformity NonConformity? @relation(fields: [nonConformityId], references: [id])
+
+  @@map("capas")
+}
+
+model LabAnalysis {
+  id          String       @id @default(uuid(7))
+  siteId      String
+  batchId     String?
+  sampleCode  String       @unique
+  /// MICROBIOLOGY, ALLERGEN_TRACES, MOISTURE, VISCOSITY, PARTICLE_SIZE, SENSORY, FOREIGN_BODY, CONTAMINANTS (cadmium, mycotoxines)
+  kind        String
+  /// INTERNAL | EXTERNAL
+  lab         String
+  requestedAt DateTime     @default(now())
+  resultAt    DateTime?
+  results     Json?
+  conclusion  CheckResult?
+  documentKey String?
+
+  @@map("lab_analyses")
+}
+
+enum ReleaseDecision {
+  RELEASED
+  BLOCKED
+  RELEASED_WITH_DEVIATION
+}
+
+/// Décision de libération : immuable, une nouvelle décision remplace la précédente
+model BatchRelease {
+  id          String          @id @default(uuid(7))
+  siteId      String
+  batchId     String
+  decision    ReleaseDecision
+  checklist   Json
+  comment     String?
+  decidedById String
+  decidedAt   DateTime        @default(now())
+
+  batch Batch @relation(fields: [batchId], references: [id])
+
+  @@index([batchId, decidedAt])
+  @@map("batch_releases")
+}
+
+model Recall {
+  id                  String     @id @default(uuid(7))
+  number              String     @unique
+  /// WITHDRAWAL (retrait, circuit pro) | RECALL (rappel consommateurs)
+  kind                String
+  reason              String
+  severity            NcSeverity
+  /// OPEN | AUTHORITY_NOTIFIED | IN_PROGRESS | CLOSED
+  status              String     @default("OPEN")
+  authorityNotifiedAt DateTime?
+  openedById          String
+  openedAt            DateTime   @default(now())
+  customersNotified   Json       @default("[]")
+  recoveredQty        Decimal?   @db.Decimal(14, 3)
+  closedAt            DateTime?
+
+  batches RecallBatch[]
+
+  @@map("recalls")
+}
+
+model RecallBatch {
+  recallId String
+  batchId  String
+
+  recall Recall @relation(fields: [recallId], references: [id])
+  batch  Batch  @relation(fields: [batchId], references: [id])
+
+  @@id([recallId, batchId])
+  @@map("recall_batches")
+}
+
+model QualityCertification {
+  id                String   @id @default(uuid(7))
+  siteId            String?
+  /// IFS_FOOD, BRCGS, FSSC_22000, ISO_22000, ORGANIC, FAIRTRADE, RAINFOREST_ALLIANCE, HALAL, KOSHER
+  scheme            String
+  certificateNumber String
+  issuedAt          DateTime @db.Date
+  validUntil        DateTime @db.Date
+  certificationBody String
+  grade             String?
+  documentKey       String?
+  status            String   @default("VALID")
+
+  @@map("quality_certifications")
+}
+
+model Complaint {
+  id                  String    @id @default(uuid(7))
+  number              String    @unique
+  customerId          String?
+  consumerContact     Json?
+  channel             String
+  productId           String?
+  batchCode           String?
+  /// FOREIGN_BODY, TASTE, FAT_BLOOM (blanchiment), BREAKAGE, PACKAGING, ALLERGIC_REACTION, DELIVERY
+  category            String
+  description         String
+  createdByEmployeeId String
+  createdAt           DateTime  @default(now())
+  status              String    @default("OPEN")
+  nonConformityId     String?
+  response            String?
+  compensation        String?
+  closedAt            DateTime?
+
+  @@map("complaints")
+}
+
+// =============================================================================
+// 8. ARTICLES, STOCKS, ENTREPÔTS
+// =============================================================================
+
+enum Uom {
+  KG
+  G
+  L
+  ML
+  PIECE
+  BOX
+  CARTON
+  PALLET
+  BAG
+  ROLL
+}
+
+enum ItemType {
+  RAW_MATERIAL
+  PACKAGING
+  INTERMEDIATE
+  FINISHED_GOOD
+  SPARE_PART
+  CONSUMABLE
+  PPE
+}
+
+model Item {
+  id                String    @id @default(uuid(7))
+  companyId         String
+  sku               String    @unique
+  name              String
+  type              ItemType
+  /// COCOA_BEANS, COCOA_BUTTER, COCOA_MASS, SUGAR, MILK_POWDER, HAZELNUTS, ALMONDS, VANILLA, LECITHIN, FOIL, CARTON...
+  category          String
+  baseUom           Uom
+  purchaseUom       Uom?
+  conversionFactor  Decimal   @default(1) @db.Decimal(14, 6)
+  isLotTracked      Boolean   @default(true)
+  isExpiryTracked   Boolean   @default(true)
+  shelfLifeDays     Int?
+  storageConditions String?
+  minStock          Decimal?  @db.Decimal(14, 3)
+  maxStock          Decimal?  @db.Decimal(14, 3)
+  reorderPoint      Decimal?  @db.Decimal(14, 3)
+  standardCost      Decimal?  @db.Decimal(14, 4)
+  defaultLocationId String?
+  defaultSupplierId String?
+  palletization     Json?
+  originCountry     String?
+  hsCode            String?
+  /// Matière soumise au règlement européen contre la déforestation (cacao)
+  eudrRelevant      Boolean   @default(false)
+  status            String    @default("ACTIVE")
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  deletedAt         DateTime?
+
+  company            Company             @relation(fields: [companyId], references: [id])
+  product            Product?
+  allergens          ItemAllergen[]
+  recipeLines        RecipeLine[]
+  batches            Batch[]
+  stockLots          StockLot[]
+  purchaseOrderLines PurchaseOrderLine[]
+
+  @@index([type, category])
+  @@map("items")
+}
+
+enum WarehouseKind {
+  RAW_MATERIALS
+  FINISHED_GOODS
+  COLD_ROOM
+  STORE_BACKROOM
+  QUARANTINE
+  SPARE_PARTS
+}
+
+model Warehouse {
+  id             String        @id @default(uuid(7))
+  siteId         String
+  buildingId     String?
+  code           String
+  name           String
+  kind           WarehouseKind
+  temperatureMin Decimal?      @db.Decimal(5, 2)
+  temperatureMax Decimal?      @db.Decimal(5, 2)
+  createdAt      DateTime      @default(now())
+
+  site      Site       @relation(fields: [siteId], references: [id])
+  building  Building?  @relation(fields: [buildingId], references: [id])
+  locations Location[]
+
+  @@unique([siteId, code])
+  @@map("warehouses")
+}
+
+model Location {
+  id              String  @id @default(uuid(7))
+  siteId          String
+  warehouseId     String
+  /// Allée-rack-niveau-position, ex. A-01-02-03
+  code            String
+  /// RACK | FLOOR | DOCK | QUARANTINE | PRODUCTION | PICKING
+  kind            String
+  capacityPallets Int?
+  isBlocked       Boolean @default(false)
+  worldX          Float   @default(0)
+  worldY          Float   @default(0)
+  worldZ          Float   @default(0)
+
+  site      Site       @relation(fields: [siteId], references: [id])
+  warehouse Warehouse  @relation(fields: [warehouseId], references: [id])
+  stockLots StockLot[]
+
+  @@unique([warehouseId, code])
+  @@map("locations")
+}
+
+enum StockStatus {
+  AVAILABLE
+  QUARANTINE
+  BLOCKED
+  RESERVED
+}
+
+/// Stock courant par article, lot et emplacement (vue matérialisée des mouvements)
+model StockLot {
+  id          String      @id @default(uuid(7))
+  siteId      String
+  itemId      String
+  batchId     String?
+  /// Clé non nulle pour l'unicité (PostgreSQL considère les NULL distincts)
+  lotKey      String      @default("NO_LOT")
+  locationId  String
+  quantity    Decimal     @db.Decimal(14, 3)
+  reservedQty Decimal     @default(0) @db.Decimal(14, 3)
+  uom         Uom
+  status      StockStatus @default(AVAILABLE)
+  bestBefore  DateTime?   @db.Date
+  unitCost    Decimal?    @db.Decimal(14, 4)
+  updatedAt   DateTime    @updatedAt
+
+  item     Item     @relation(fields: [itemId], references: [id])
+  batch    Batch?   @relation(fields: [batchId], references: [id])
+  location Location @relation(fields: [locationId], references: [id])
+
+  @@unique([itemId, locationId, lotKey])
+  @@index([siteId, itemId])
+  @@index([bestBefore])
+  @@map("stock_lots")
+}
+
+enum MovementType {
+  RECEIPT
+  PRODUCTION_CONSUMPTION
+  PRODUCTION_OUTPUT
+  TRANSFER
+  INVENTORY_ADJUSTMENT
+  SHIPMENT
+  CUSTOMER_RETURN
+  SUPPLIER_RETURN
+  SCRAP
+  STORE_SALE
+  MAINTENANCE_ISSUE
+  PPE_ISSUE
+  QUALITY_SAMPLE
+}
+
+/// Mouvement de stock : immuable, une erreur se corrige par contre-passation (reversalOfId)
+model StockMovement {
+  id                  String       @id @default(uuid(7))
+  siteId              String
+  itemId              String
+  batchId             String?
+  fromLocationId      String?
+  toLocationId        String?
+  quantity            Decimal      @db.Decimal(14, 3)
+  uom                 Uom
+  type                MovementType
+  referenceType       String?
+  referenceId         String?
+  unitCost            Decimal?     @db.Decimal(14, 4)
+  reason              String?
+  createdByEmployeeId String?
+  deviceId            String?
+  reversalOfId        String?      @unique
+  at                  DateTime     @default(now())
+
+  @@index([siteId, at])
+  @@index([itemId, at])
+  @@index([batchId])
+  @@index([referenceType, referenceId])
+  @@map("stock_movements")
+}
+
+model InventoryCount {
+  id            String    @id @default(uuid(7))
+  siteId        String
+  warehouseId   String?
+  /// CYCLE | ANNUAL | SPOT
+  kind          String
+  /// PLANNED | IN_PROGRESS | TO_APPROVE | APPROVED | CANCELLED
+  status        String    @default("PLANNED")
+  scheduledAt   DateTime
+  countedById   String?
+  approvedById  String?
+  approvedAt    DateTime?
+  varianceValue Decimal?  @db.Decimal(14, 2)
+  createdAt     DateTime  @default(now())
+
+  lines InventoryLine[]
+
+  @@map("inventory_counts")
+}
+
+model InventoryLine {
+  id          String    @id @default(uuid(7))
+  countId     String
+  itemId      String
+  batchId     String?
+  locationId  String
+  expectedQty Decimal   @db.Decimal(14, 3)
+  countedQty  Decimal?  @db.Decimal(14, 3)
+  varianceQty Decimal?  @db.Decimal(14, 3)
+  countedAt   DateTime?
+  recount     Boolean   @default(false)
+
+  count InventoryCount @relation(fields: [countId], references: [id], onDelete: Cascade)
+
+  @@map("inventory_lines")
+}
+
+model StockTransfer {
+  id            String    @id @default(uuid(7))
+  number        String    @unique
+  siteId        String
+  toSiteId      String
+  /// REQUESTED | PREPARED | SHIPPED | RECEIVED | CANCELLED
+  status        String    @default("REQUESTED")
+  requestedById String
+  shippedAt     DateTime?
+  receivedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  lines StockTransferLine[]
+
+  @@map("stock_transfers")
+}
+
+model StockTransferLine {
+  id          String   @id @default(uuid(7))
+  transferId  String
+  itemId      String
+  batchId     String?
+  quantity    Decimal  @db.Decimal(14, 3)
+  receivedQty Decimal? @db.Decimal(14, 3)
+
+  transfer StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+
+  @@map("stock_transfer_lines")
+}
+
+/// Mesures capteurs : très gros volume (extension TimescaleDB ou partitionnement)
+model EnvironmentReading {
+  id           String   @id @default(uuid(7))
+  siteId       String
+  deviceId     String?
+  warehouseId  String?
+  zoneId       String?
+  at           DateTime
+  temperatureC Decimal  @db.Decimal(5, 2)
+  humidityPct  Decimal? @db.Decimal(5, 2)
+  alert        Boolean  @default(false)
+
+  @@index([siteId, at])
+  @@index([warehouseId, at])
+  @@map("environment_readings")
+}
+
+// =============================================================================
+// 9. OUTILS, ÉTALONNAGE, EPI
+// =============================================================================
+
+enum ToolStatus {
+  AVAILABLE
+  ON_LOAN
+  IN_CALIBRATION
+  IN_REPAIR
+  LOST
+  SCRAPPED
+}
+
+model Tool {
+  id                      String        @id @default(uuid(7))
+  siteId                  String
+  code                    String        @unique
+  name                    String
+  /// POLYCARBONATE_MOULD, HAND_TOOL, POWER_TOOL, MEASURING_INSTRUMENT (thermomètre, balance), CLEANING_EQUIPMENT...
+  category                String
+  serial                  String?
+  status                  ToolStatus    @default(AVAILABLE)
+  condition               String        @default("GOOD")
+  locationId              String?
+  requiresCalibration     Boolean       @default(false)
+  calibrationIntervalDays Int?
+  nextCalibrationAt       DateTime?
+  requiredTrainingType    TrainingType?
+  /// Moules : produit associé, nombre d'empreintes, cycles
+  productId               String?
+  cavityCount             Int?
+  cycles                  Int           @default(0)
+  maxCycles               Int?
+  rfidTag                 String?       @unique
+  qrCode                  String        @unique
+  purchaseDate            DateTime?
+  value                   Decimal?      @db.Decimal(14, 2)
+  photoUrl                String?
+  createdAt               DateTime      @default(now())
+  deletedAt               DateTime?
+
+  loans        ToolLoan[]
+  calibrations Calibration[]
+
+  @@index([siteId, status])
+  @@map("tools")
+}
+
+model ToolLoan {
+  id           String    @id @default(uuid(7))
+  toolId       String
+  employeeId   String
+  siteId       String
+  teamId       String?
+  borrowedAt   DateTime  @default(now())
+  dueAt        DateTime?
+  returnedAt   DateTime?
+  conditionOut String    @default("GOOD")
+  conditionIn  String?
+  /// ON_LOAN | RETURNED | OVERDUE | LOST
+  status       String    @default("ON_LOAN")
+  deviceId     String?
+  issuedById   String?
+  workOrderId  String?
+
+  tool     Tool     @relation(fields: [toolId], references: [id])
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@index([toolId, status])
+  @@index([employeeId, status])
+  @@map("tool_loans")
+}
+
+model Calibration {
+  id             String    @id @default(uuid(7))
+  siteId         String
+  toolId         String?
+  machineId      String?
+  performedAt    DateTime
+  /// INTERNAL | EXTERNAL
+  performedBy    String
+  provider       String?
+  /// PASS | ADJUSTED | FAIL
+  result         String
+  measurements   Json?
+  certificateKey String?
+  nextDueAt      DateTime?
+
+  tool Tool? @relation(fields: [toolId], references: [id])
+
+  @@map("calibrations")
+}
+
+/// Dotation d'équipement de protection individuelle
+model Ppe {
+  id           String    @id @default(uuid(7))
+  employeeId   String
+  siteId       String
+  teamId       String?
+  itemId       String
+  size         String?
+  quantity     Int       @default(1)
+  issuedAt     DateTime  @default(now())
+  expiresAt    DateTime?
+  returnedAt   DateTime?
+  signatureKey String?
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@map("ppe_issues")
+}
+
+// =============================================================================
+// 10. MAINTENANCE (GMAO)
+// =============================================================================
+
+model MaintenancePlan {
+  id               String    @id @default(uuid(7))
+  siteId           String
+  machineId        String
+  name             String
+  /// CALENDAR | RUN_HOURS | CYCLES | CONDITION
+  trigger          String
+  intervalDays     Int?
+  intervalHours    Int?
+  intervalCycles   Int?
+  lastDoneAt       DateTime?
+  nextDueAt        DateTime?
+  tasks            Json
+  estimatedMinutes Int
+  requiredSkills   String[]
+  requiresShutdown Boolean   @default(true)
+  active           Boolean   @default(true)
+
+  machine    Machine     @relation(fields: [machineId], references: [id])
+  workOrders WorkOrder[]
+
+  @@map("maintenance_plans")
+}
+
+enum WorkOrderKind {
+  REQUEST
+  PREVENTIVE
+  CORRECTIVE
+  IMPROVEMENT
+}
+
+enum WorkOrderStatus {
+  REQUESTED
+  ACCEPTED
+  PLANNED
+  IN_PROGRESS
+  WAITING_PARTS
+  DONE
+  CLOSED
+  CANCELLED
+}
+
+model WorkOrder {
+  id                       String          @id @default(uuid(7))
+  number                   String          @unique
+  siteId                   String
+  teamId                   String?
+  machineId                String?
+  toolId                   String?
+  planId                   String?
+  kind                     WorkOrderKind
+  /// P1 sécurité ou sécurité alimentaire, P2 arrêt de ligne, P3 dégradé, P4 amélioration
+  priority                 String          @default("P3")
+  status                   WorkOrderStatus @default(REQUESTED)
+  title                    String
+  description              String?
+  requestedByEmployeeId    String?
+  assignedToEmployeeId     String?
+  contractorUserId         String?
+  plannedAt                DateTime?
+  startedAt                DateTime?
+  finishedAt               DateTime?
+  downtimeMinutes          Int?
+  laborMinutes             Int?
+  partsCost                Decimal?        @db.Decimal(14, 2)
+  cause                    String?
+  actionTaken              String?
+  /// Remise en production en zone alimentaire : nettoyage validé par la qualité
+  requiresHygieneClearance Boolean         @default(false)
+  hygieneClearedById       String?
+  hygieneClearedAt         DateTime?
+  createdAt                DateTime        @default(now())
+  updatedAt                DateTime        @updatedAt
+
+  machine Machine?         @relation(fields: [machineId], references: [id])
+  plan    MaintenancePlan? @relation(fields: [planId], references: [id])
+
+  @@index([siteId, status, priority])
+  @@index([assignedToEmployeeId, status])
+  @@map("work_orders")
+}
+
+// =============================================================================
+// 11. ACHATS ET FOURNISSEURS
+// =============================================================================
+
+enum SupplierStatus {
+  PROSPECT
+  QUALIFYING
+  APPROVED
+  UNDER_WATCH
+  BLOCKED
+}
+
+model Supplier {
+  id               String         @id @default(uuid(7))
+  companyId        String
+  code             String         @unique
+  name             String
+  vatNumber        String?
+  country          String
+  /// COCOA_BEANS, INGREDIENTS, PACKAGING, SERVICES, MAINTENANCE, TRANSPORT, ENERGY
+  kind             String
+  status           SupplierStatus @default(PROSPECT)
+  qualityRating    Int?
+  deliveryRating   Int?
+  riskLevel        String         @default("STANDARD")
+  certifications   Json           @default("[]")
+  contacts         Json           @default("[]")
+  address          Json
+  paymentTermsDays Int            @default(30)
+  currency         String         @default("EUR")
+  incoterm         String?
+  peppolId         String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  deletedAt        DateTime?
+
+  company        Company               @relation(fields: [companyId], references: [id])
+  bankAccounts   SupplierBankAccount[]
+  dueDiligences  DueDiligence[]
+  contracts      SupplierContract[]
+  purchaseOrders PurchaseOrder[]
+  invoices       SupplierInvoice[]
+
+  @@map("suppliers")
+}
+
+/// Coordonnées bancaires : double validation + contre-appel obligatoire (fraude au changement d'IBAN)
+model SupplierBankAccount {
+  id                 String    @id @default(uuid(7))
+  supplierId         String
+  ibanEnc            String
+  ibanLast4          String
+  bic                String?
+  holderName         String
+  /// PENDING | APPROVED | REJECTED
+  status             String    @default("PENDING")
+  requestedById      String
+  approvedById       String?
+  callbackPhone      String?
+  callbackVerifiedAt DateTime?
+  callbackVerifiedBy String?
+  createdAt          DateTime  @default(now())
+
+  supplier Supplier @relation(fields: [supplierId], references: [id])
+
+  @@map("supplier_bank_accounts")
+}
+
+/// Devoir de vigilance déforestation (cacao) : déclaration, géolocalisation des parcelles, analyse de risque
+model DueDiligence {
+  id                  String    @id @default(uuid(7))
+  supplierId          String
+  itemId              String?
+  reference           String?   @unique
+  commodity           String    @default("COCOA")
+  countryOfProduction String
+  /// GeoJSON des parcelles
+  plots               Json
+  /// NEGLIGIBLE | STANDARD | HIGH
+  riskAssessment      String
+  mitigation          String?
+  /// DRAFT | SUBMITTED | ACCEPTED | REJECTED
+  status              String    @default("DRAFT")
+  submittedAt         DateTime?
+  validUntil          DateTime?
+  documents           String[]
+  createdAt           DateTime  @default(now())
+
+  supplier Supplier @relation(fields: [supplierId], references: [id])
+
+  @@map("due_diligences")
+}
+
+model SupplierContract {
+  id           String   @id @default(uuid(7))
+  supplierId   String
+  number       String   @unique
+  /// FRAMEWORK | FIXED_PRICE | CONSIGNMENT | SERVICE
+  kind         String
+  itemId       String?
+  startDate    DateTime @db.Date
+  endDate      DateTime @db.Date
+  totalQty     Decimal? @db.Decimal(14, 3)
+  uom          Uom?
+  price        Decimal? @db.Decimal(14, 4)
+  currency     String   @default("EUR")
+  /// Formule d'indexation (ex. cours du cacao + différentiel origine)
+  priceFormula String?
+  /// DRAFT | TO_APPROVE | ACTIVE | EXPIRED | TERMINATED
+  status       String   @default("DRAFT")
+  documentKey  String?
+  approvedById String?
+  createdAt    DateTime @default(now())
+
+  supplier       Supplier        @relation(fields: [supplierId], references: [id])
+  purchaseOrders PurchaseOrder[]
+
+  @@map("supplier_contracts")
+}
+
+model PurchaseRequest {
+  id                    String    @id @default(uuid(7))
+  number                String    @unique
+  siteId                String
+  departmentId          String?
+  requestedByEmployeeId String
+  itemId                String?
+  description           String
+  quantity              Decimal   @db.Decimal(14, 3)
+  uom                   Uom
+  estimatedAmount       Decimal?  @db.Decimal(14, 2)
+  neededBy              DateTime? @db.Date
+  justification         String?
+  /// DRAFT | SUBMITTED | APPROVED | REJECTED | CONVERTED | CANCELLED
+  status                String    @default("DRAFT")
+  purchaseOrderId       String?
+  buyerComment          String?
+  approvalId            String?
+  createdAt             DateTime  @default(now())
+
+  @@index([siteId, status])
+  @@map("purchase_requests")
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  TO_APPROVE
+  APPROVED
+  SENT
+  CONFIRMED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CLOSED
+  CANCELLED
+}
+
+model PurchaseOrder {
+  id              String              @id @default(uuid(7))
+  number          String              @unique
+  siteId          String
+  supplierId      String
+  buyerEmployeeId String
+  contractId      String?
+  status          PurchaseOrderStatus @default(DRAFT)
+  orderDate       DateTime            @default(now())
+  expectedDate    DateTime?           @db.Date
+  currency        String              @default("EUR")
+  totalExclVat    Decimal             @default(0) @db.Decimal(14, 2)
+  totalVat        Decimal             @default(0) @db.Decimal(14, 2)
+  incoterm        String?
+  deliveryAddress Json?
+  notes           String?
+  approvalId      String?
+  sentAt          DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  supplier Supplier            @relation(fields: [supplierId], references: [id])
+  contract SupplierContract?   @relation(fields: [contractId], references: [id])
+  lines    PurchaseOrderLine[]
+  receipts GoodsReceipt[]
+
+  @@index([siteId, status])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderLine {
+  id           String    @id @default(uuid(7))
+  orderId      String
+  itemId       String
+  description  String?
+  quantity     Decimal   @db.Decimal(14, 3)
+  uom          Uom
+  unitPrice    Decimal   @db.Decimal(14, 4)
+  vatRate      Decimal   @db.Decimal(5, 2)
+  receivedQty  Decimal   @default(0) @db.Decimal(14, 3)
+  expectedDate DateTime? @db.Date
+
+  order PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  item  Item          @relation(fields: [itemId], references: [id])
+
+  @@map("purchase_order_lines")
+}
+
+model GoodsReceipt {
+  id                   String   @id @default(uuid(7))
+  number               String   @unique
+  siteId               String
+  purchaseOrderId      String?
+  supplierId           String
+  receivedAt           DateTime @default(now())
+  receivedByEmployeeId String
+  deliveryNote         String?
+  carrier              String?
+  truckTemperatureC    Decimal? @db.Decimal(5, 2)
+  truckCleanOk         Boolean?
+  sealIntact           Boolean?
+  /// IN_PROGRESS | QUALITY_CHECK | ACCEPTED | ACCEPTED_WITH_RESERVATION | REJECTED
+  status               String   @default("IN_PROGRESS")
+
+  purchaseOrder PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id])
+  lines         GoodsReceiptLine[]
+
+  @@map("goods_receipts")
+}
+
+model GoodsReceiptLine {
+  id              String    @id @default(uuid(7))
+  receiptId       String
+  poLineId        String?
+  itemId          String
+  quantity        Decimal   @db.Decimal(14, 3)
+  uom             Uom
+  supplierLotCode String?
+  bestBefore      DateTime? @db.Date
+  batchId         String?
+  locationId      String?
+  accepted        Boolean   @default(true)
+  rejectionReason String?
+
+  receipt GoodsReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+
+  @@map("goods_receipt_lines")
+}
+
+model SupplierInvoice {
+  id               String   @id @default(uuid(7))
+  supplierId       String
+  siteId           String?
+  invoiceNumber    String
+  invoiceDate      DateTime @db.Date
+  dueDate          DateTime @db.Date
+  totalExclVat     Decimal  @db.Decimal(14, 2)
+  totalVat         Decimal  @db.Decimal(14, 2)
+  totalInclVat     Decimal  @db.Decimal(14, 2)
+  currency         String   @default("EUR")
+  purchaseOrderId  String?
+  /// UNMATCHED | MATCHED | PRICE_VARIANCE | QTY_VARIANCE (rapprochement commande / réception / facture)
+  matchStatus      String   @default("UNMATCHED")
+  /// RECEIVED | TO_APPROVE | APPROVED | PAID | DISPUTED
+  status           String   @default("RECEIVED")
+  peppolDocumentId String?
+  fileKey          String?
+  approvedById     String?
+  journalEntryId   String?
+  createdById      String
+  createdAt        DateTime @default(now())
+
+  supplier Supplier @relation(fields: [supplierId], references: [id])
+
+  @@unique([supplierId, invoiceNumber])
+  @@map("supplier_invoices")
+}
+
+// =============================================================================
+// 12. VENTES ET CLIENTS
+// =============================================================================
+
+enum CustomerSegment {
+  RETAIL_CHAIN // grande distribution
+  WHOLESALER
+  HORECA
+  ARTISAN // chocolatiers, pâtissiers (couverture)
+  EXPORT
+  CORPORATE // cadeaux d'affaires
+  PARTNER_STORE
+  CONSUMER
+}
+
+model Customer {
+  id                       String          @id @default(uuid(7))
+  companyId                String
+  code                     String          @unique
+  name                     String
+  segment                  CustomerSegment
+  vatNumber                String?
+  peppolId                 String?
+  accountManagerEmployeeId String?
+  billingAddress           Json
+  deliveryAddresses        Json            @default("[]")
+  deliveryContact          String?
+  deliveryInstructions     String?
+  city                     String?
+  country                  String          @default("BE")
+  language                 String          @default("fr")
+  paymentTermsDays         Int             @default(30)
+  creditLimit              Decimal?        @db.Decimal(14, 2)
+  /// OK | WATCH | BLOCKED
+  creditStatus             String          @default("OK")
+  priceListId              String?
+  status                   String          @default("ACTIVE")
+  /// Emplacement et style du bâtiment client dans la ville 3D
+  worldX                   Float?
+  worldZ                   Float?
+  buildingStyle            String?
+  createdAt                DateTime        @default(now())
+  updatedAt                DateTime        @updatedAt
+  deletedAt                DateTime?
+
+  company     Company      @relation(fields: [companyId], references: [id])
+  priceList   PriceList?   @relation(fields: [priceListId], references: [id])
+  salesOrders SalesOrder[]
+  invoices    Invoice[]
+  quotes      Quote[]
+
+  @@map("customers")
+}
+
+enum LeadStage {
+  TO_CALL // à appeler
+  NO_ANSWER // pas de réponse
+  FOLLOW_UP // à relancer
+  MEETING // rendez-vous
+  QUALIFIED
+  WON // signé
+  LOST
+  ARCHIVED
+}
+
+/// Prospect : chaque prospect est un personnage dans le bâtiment commercial du monde 3D,
+/// placé dans la pièce correspondant à son étape
+model Lead {
+  id                  String          @id @default(uuid(7))
+  ownerEmployeeId     String?
+  company             String
+  contactName         String?
+  email               String?
+  phone               String?
+  segment             CustomerSegment
+  /// TRADE_FAIR | WEBSITE | REFERRAL | OUTBOUND | IMPORT
+  source              String
+  stage               LeadStage       @default(TO_CALL)
+  score               Int             @default(0)
+  lastContactAt       DateTime?
+  nextActionAt        DateTime?
+  notes               String?
+  convertedCustomerId String?
+  /// Base légale de la prospection B2B (intérêt légitime) et opposition éventuelle
+  objectedAt          DateTime?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  activities Activity[]
+
+  @@index([ownerEmployeeId, stage])
+  @@map("leads")
+}
+
+model Opportunity {
+  id                String    @id @default(uuid(7))
+  ownerEmployeeId   String
+  customerId        String?
+  leadId            String?
+  title             String
+  /// DISCOVERY | PROPOSAL | NEGOTIATION | WON | LOST
+  stage             String    @default("DISCOVERY")
+  amount            Decimal?  @db.Decimal(14, 2)
+  probability       Int       @default(20)
+  expectedCloseDate DateTime? @db.Date
+  lostReason        String?
+  createdAt         DateTime  @default(now())
+
+  @@map("opportunities")
+}
+
+model Activity {
+  id              String   @id @default(uuid(7))
+  ownerEmployeeId String
+  /// CALL | EMAIL | MEETING | VISIT | TASTING | NOTE
+  kind            String
+  leadId          String?
+  customerId      String?
+  opportunityId   String?
+  subject         String
+  /// REACHED | NO_ANSWER | CALL_BACK | INTERESTED | NOT_INTERESTED
+  outcome         String?
+  at              DateTime @default(now())
+  durationMinutes Int?
+  notes           String?
+
+  lead Lead? @relation(fields: [leadId], references: [id])
+
+  @@index([ownerEmployeeId, at])
+  @@map("activities")
+}
+
+model PriceList {
+  id        String           @id @default(uuid(7))
+  companyId String
+  code      String           @unique
+  name      String
+  currency  String           @default("EUR")
+  segment   CustomerSegment?
+  validFrom DateTime         @db.Date
+  validTo   DateTime?        @db.Date
+
+  company   Company         @relation(fields: [companyId], references: [id])
+  lines     PriceListLine[]
+  customers Customer[]
+
+  @@map("price_lists")
+}
+
+model PriceListLine {
+  id          String  @id @default(uuid(7))
+  priceListId String
+  productId   String
+  unitPrice   Decimal @db.Decimal(14, 4)
+  minQty      Decimal @default(1) @db.Decimal(14, 3)
+  uom         Uom     @default(PIECE)
+
+  priceList PriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId], references: [id])
+
+  @@unique([priceListId, productId, minQty])
+  @@map("price_list_lines")
+}
+
+model Promotion {
+  id         String   @id @default(uuid(7))
+  code       String   @unique
+  name       String
+  /// PERCENT_OFF | AMOUNT_OFF | BUNDLE | FREE_PRODUCT
+  kind       String
+  value      Decimal  @db.Decimal(14, 2)
+  startsAt   DateTime
+  endsAt     DateTime
+  productIds String[]
+  segments   String[]
+  /// B2B | STORE | ECOMMERCE
+  channel    String
+  status     String   @default("DRAFT")
+  createdAt  DateTime @default(now())
+
+  @@map("promotions")
+}
+
+model Quote {
+  id              String   @id @default(uuid(7))
+  number          String   @unique
+  ownerEmployeeId String
+  customerId      String?
+  leadId          String?
+  /// DRAFT | TO_APPROVE | SENT | ACCEPTED | REJECTED | EXPIRED
+  status          String   @default("DRAFT")
+  validUntil      DateTime @db.Date
+  discountPercent Decimal  @default(0) @db.Decimal(5, 2)
+  totalExclVat    Decimal  @default(0) @db.Decimal(14, 2)
+  totalVat        Decimal  @default(0) @db.Decimal(14, 2)
+  currency        String   @default("EUR")
+  notes           String?
+  approvalId      String?
+  createdAt       DateTime @default(now())
+
+  customer Customer?   @relation(fields: [customerId], references: [id])
+  lines    QuoteLine[]
+
+  @@map("quotes")
+}
+
+model QuoteLine {
+  id              String  @id @default(uuid(7))
+  quoteId         String
+  productId       String
+  description     String?
+  quantity        Decimal @db.Decimal(14, 3)
+  unitPrice       Decimal @db.Decimal(14, 4)
+  discountPercent Decimal @default(0) @db.Decimal(5, 2)
+  vatRate         Decimal @db.Decimal(5, 2)
+
+  quote Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  @@map("quote_lines")
+}
+
+enum SalesOrderStatus {
+  DRAFT
+  CONFIRMED
+  IN_PRODUCTION
+  PICKING
+  READY
+  SHIPPED
+  DELIVERED
+  INVOICED
+  CANCELLED
+}
+
+/// Commande client : dans la ville 3D, chaque commande est un chantier dont le bâtiment monte avec la progression
+model SalesOrder {
+  id                    String           @id @default(uuid(7))
+  number                String           @unique
+  customerId            String
+  salesRepEmployeeId    String?
+  shippingSiteId        String
+  quoteId               String?
+  /// B2B | EDI | ECOMMERCE | STORE
+  channel               String           @default("B2B")
+  status                SalesOrderStatus @default(DRAFT)
+  /// 0 à 100, calculé : confirmée 10, production 40, préparation 70, expédiée 90, livrée 100
+  progress              Int              @default(0)
+  orderDate             DateTime         @default(now())
+  requestedDeliveryDate DateTime?        @db.Date
+  promisedDate          DateTime?        @db.Date
+  totalExclVat          Decimal          @default(0) @db.Decimal(14, 2)
+  totalVat              Decimal          @default(0) @db.Decimal(14, 2)
+  currency              String           @default("EUR")
+  incoterm              String?
+  deliveryAddress       Json?
+  ediReference          String?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  customer Customer         @relation(fields: [customerId], references: [id])
+  lines    SalesOrderLine[]
+  invoices Invoice[]
+
+  @@index([shippingSiteId, status])
+  @@index([salesRepEmployeeId, status])
+  @@map("sales_orders")
+}
+
+model SalesOrderLine {
+  id               String  @id @default(uuid(7))
+  orderId          String
+  productId        String
+  quantity         Decimal @db.Decimal(14, 3)
+  uom              Uom     @default(PIECE)
+  unitPrice        Decimal @db.Decimal(14, 4)
+  discountPercent  Decimal @default(0) @db.Decimal(5, 2)
+  vatRate          Decimal @db.Decimal(5, 2)
+  reservedQty      Decimal @default(0) @db.Decimal(14, 3)
+  shippedQty       Decimal @default(0) @db.Decimal(14, 3)
+  batchAllocations Json    @default("[]")
+
+  order SalesOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("sales_order_lines")
+}
+
+enum PeppolStatus {
+  NOT_APPLICABLE
+  TO_SEND
+  SENT
+  ACCEPTED
+  REJECTED
+}
+
+/// Facture : numérotation continue sans trou par exercice, jamais supprimée (annulation par note de crédit)
+model Invoice {
+  id                      String       @id @default(uuid(7))
+  number                  String       @unique
+  customerId              String
+  salesRepEmployeeId      String?
+  salesOrderId            String?
+  issueDate               DateTime     @db.Date
+  dueDate                 DateTime     @db.Date
+  totalExclVat            Decimal      @db.Decimal(14, 2)
+  totalVat                Decimal      @db.Decimal(14, 2)
+  totalInclVat            Decimal      @db.Decimal(14, 2)
+  currency                String       @default("EUR")
+  /// DRAFT | ISSUED | SENT | PARTIALLY_PAID | PAID | OVERDUE | CREDITED
+  status                  String       @default("DRAFT")
+  peppolStatus            PeppolStatus @default(TO_SEND)
+  peppolMessageId         String?
+  /// Communication structurée belge +++000/0000/00000+++
+  structuredCommunication String?
+  journalEntryId          String?
+  createdById             String
+  createdAt               DateTime     @default(now())
+
+  customer    Customer      @relation(fields: [customerId], references: [id])
+  salesOrder  SalesOrder?   @relation(fields: [salesOrderId], references: [id])
+  lines       InvoiceLine[]
+  creditNotes CreditNote[]
+
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  id           String  @id @default(uuid(7))
+  invoiceId    String
+  productId    String?
+  description  String
+  quantity     Decimal @db.Decimal(14, 3)
+  unitPrice    Decimal @db.Decimal(14, 4)
+  vatRate      Decimal @db.Decimal(5, 2)
+  totalExclVat Decimal @db.Decimal(14, 2)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@map("invoice_lines")
+}
+
+model CreditNote {
+  id           String       @id @default(uuid(7))
+  number       String       @unique
+  invoiceId    String
+  customerId   String
+  reason       String
+  totalExclVat Decimal      @db.Decimal(14, 2)
+  totalVat     Decimal      @db.Decimal(14, 2)
+  /// DRAFT | TO_APPROVE | ISSUED
+  status       String       @default("DRAFT")
+  peppolStatus PeppolStatus @default(TO_SEND)
+  approvalId   String?
+  createdById  String
+  createdAt    DateTime     @default(now())
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+
+  @@map("credit_notes")
+}
+
+// =============================================================================
+// 13. BOUTIQUES
+// =============================================================================
+
+model Store {
+  id              String  @id @default(uuid(7))
+  siteId          String  @unique
+  name            String
+  openingHours    Json
+  registerCount   Int     @default(1)
+  clickAndCollect Boolean @default(false)
+
+  site     Site         @relation(fields: [siteId], references: [id])
+  sessions PosSession[]
+
+  @@map("stores")
+}
+
+model PosSession {
+  id                String    @id @default(uuid(7))
+  siteId            String
+  storeId           String
+  cashierEmployeeId String
+  registerCode      String
+  openedAt          DateTime  @default(now())
+  closedAt          DateTime?
+  openingFloat      Decimal   @db.Decimal(14, 2)
+  closingCount      Decimal?  @db.Decimal(14, 2)
+  expectedCash      Decimal?  @db.Decimal(14, 2)
+  variance          Decimal?  @db.Decimal(14, 2)
+  /// OPEN | CLOSED | VALIDATED
+  status            String    @default("OPEN")
+  validatedById     String?
+
+  store Store     @relation(fields: [storeId], references: [id])
+  sales PosSale[]
+
+  @@map("pos_sessions")
+}
+
+model PosSale {
+  id                String   @id @default(uuid(7))
+  number            String   @unique
+  siteId            String
+  sessionId         String
+  cashierEmployeeId String
+  at                DateTime @default(now())
+  totalInclVat      Decimal  @db.Decimal(14, 2)
+  totalVat          Decimal  @db.Decimal(14, 2)
+  /// CARD | CASH | PAYCONIQ | GIFT_CARD | MIXED
+  paymentMethod     String
+  loyaltyMemberId   String?
+  /// COMPLETED | VOIDED
+  status            String   @default("COMPLETED")
+  voidReason        String?
+  voidApprovedById  String?
+  receiptNumber     String
+  fiscalSignature   String?
+
+  session PosSession    @relation(fields: [sessionId], references: [id])
+  lines   PosSaleLine[]
+
+  @@index([siteId, at])
+  @@map("pos_sales")
+}
+
+model PosSaleLine {
+  id        String  @id @default(uuid(7))
+  saleId    String
+  productId String
+  batchId   String?
+  quantity  Decimal @db.Decimal(14, 3)
+  unitPrice Decimal @db.Decimal(14, 4)
+  discount  Decimal @default(0) @db.Decimal(14, 2)
+  vatRate   Decimal @db.Decimal(5, 2)
+
+  sale PosSale @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@map("pos_sale_lines")
+}
+
+model LoyaltyMember {
+  id                 String    @id @default(uuid(7))
+  homeSiteId         String
+  cardNumber         String    @unique
+  firstName          String
+  lastName           String
+  email              String?
+  phone              String?
+  birthMonth         Int?
+  points             Int       @default(0)
+  marketingConsentAt DateTime?
+  createdAt          DateTime  @default(now())
+  deletedAt          DateTime?
+
+  @@map("loyalty_members")
+}
+
+// =============================================================================
+// 14. LOGISTIQUE ET TRANSPORT
+// =============================================================================
+
+model PickingList {
+  id                   String    @id @default(uuid(7))
+  number               String    @unique
+  siteId               String
+  salesOrderId         String?
+  transferId           String?
+  assignedToEmployeeId String?
+  /// TO_PICK | IN_PROGRESS | PICKED | CHECKED | CANCELLED
+  status               String    @default("TO_PICK")
+  priority             Int       @default(3)
+  startedAt            DateTime?
+  completedAt          DateTime?
+  createdAt            DateTime  @default(now())
+
+  lines PickingLine[]
+
+  @@index([siteId, status])
+  @@map("picking_lists")
+}
+
+model PickingLine {
+  id             String    @id @default(uuid(7))
+  pickingId      String
+  itemId         String
+  batchId        String?
+  fromLocationId String
+  quantity       Decimal   @db.Decimal(14, 3)
+  pickedQty      Decimal   @default(0) @db.Decimal(14, 3)
+  pickedAt       DateTime?
+  scanConfirmed  Boolean   @default(false)
+
+  picking PickingList @relation(fields: [pickingId], references: [id], onDelete: Cascade)
+
+  @@map("picking_lines")
+}
+
+model Carrier {
+  id                  String  @id @default(uuid(7))
+  name                String
+  /// OWN_FLEET | PARCEL | REFRIGERATED | CHARTER
+  kind                String
+  contact             Json    @default("{}")
+  trackingUrlTemplate String?
+
+  shipments Shipment[]
+
+  @@map("carriers")
+}
+
+model Shipment {
+  id             String    @id @default(uuid(7))
+  number         String    @unique
+  siteId         String
+  salesOrderId   String?
+  carrierId      String?
+  routeId        String?
+  /// TO_SHIP | LOADED | IN_TRANSIT | DELIVERED | INCIDENT | RETURNED
+  status         String    @default("TO_SHIP")
+  pallets        Int       @default(0)
+  parcels        Int       @default(0)
+  weightKg       Decimal?  @db.Decimal(14, 3)
+  tempControlled Boolean   @default(true)
+  trackingNumber String?
+  /// Codes SSCC des palettes
+  sscc           String[]
+  shippedAt      DateTime?
+  deliveredAt    DateTime?
+  createdAt      DateTime  @default(now())
+
+  carrier Carrier?          @relation(fields: [carrierId], references: [id])
+  route   DeliveryRoute?    @relation(fields: [routeId], references: [id])
+  proofs  ProofOfDelivery[]
+
+  @@map("shipments")
+}
+
+model DeliveryRoute {
+  id               String    @id @default(uuid(7))
+  siteId           String
+  date             DateTime  @db.Date
+  driverEmployeeId String?
+  vehicleId        String?
+  /// PLANNED | IN_PROGRESS | DONE
+  status           String    @default("PLANNED")
+  stops            Json      @default("[]")
+  startedAt        DateTime?
+  endedAt          DateTime?
+  distanceKm       Decimal?  @db.Decimal(10, 2)
+
+  vehicle   Vehicle?   @relation(fields: [vehicleId], references: [id])
+  shipments Shipment[]
+
+  @@index([driverEmployeeId, date])
+  @@map("delivery_routes")
+}
+
+model Vehicle {
+  id                 String    @id @default(uuid(7))
+  siteId             String
+  plate              String    @unique
+  /// REFRIGERATED_VAN | TRUCK | SERVICE_CAR | FORKLIFT | PALLET_TRUCK
+  kind               String
+  assignedEmployeeId String?
+  status             String    @default("AVAILABLE")
+  mileage            Int       @default(0)
+  nextServiceAt      DateTime?
+  inspectionDueAt    DateTime?
+  insuranceUntil     DateTime?
+  telematicsId       String?
+
+  routes DeliveryRoute[]
+
+  @@map("vehicles")
+}
+
+model ProofOfDelivery {
+  id               String   @id @default(uuid(7))
+  shipmentId       String
+  siteId           String
+  driverEmployeeId String
+  deliveredAt      DateTime @default(now())
+  recipientName    String
+  signatureKey     String?
+  photoKeys        String[]
+  temperatureC     Decimal? @db.Decimal(5, 2)
+  latitude         Decimal? @db.Decimal(9, 6)
+  longitude        Decimal? @db.Decimal(9, 6)
+  reservations     String?
+  comment          String?
+
+  shipment Shipment @relation(fields: [shipmentId], references: [id])
+
+  @@map("proofs_of_delivery")
+}
+
+// =============================================================================
+// 15. FINANCE
+// =============================================================================
+
+model LedgerAccount {
+  id        String  @id @default(uuid(7))
+  companyId String
+  /// Plan comptable minimum normalisé belge (PCMN)
+  code      String
+  label     String
+  /// ASSET | LIABILITY | EXPENSE | INCOME
+  type      String
+  isActive  Boolean @default(true)
+
+  company Company       @relation(fields: [companyId], references: [id])
+  lines   JournalLine[]
+
+  @@unique([companyId, code])
+  @@map("ledger_accounts")
+}
+
+model JournalEntry {
+  id          String    @id @default(uuid(7))
+  companyId   String
+  /// PURCHASES | SALES | BANK | MISC | CASH
+  journal     String
+  number      String
+  date        DateTime  @db.Date
+  period      String
+  label       String
+  /// DRAFT | POSTED | EXPORTED
+  status      String    @default("DRAFT")
+  sourceType  String?
+  sourceId    String?
+  createdById String
+  postedAt    DateTime?
+  createdAt   DateTime  @default(now())
+
+  lines JournalLine[]
+
+  @@unique([companyId, journal, number])
+  @@map("journal_entries")
+}
+
+model JournalLine {
+  id          String  @id @default(uuid(7))
+  entryId     String
+  accountId   String
+  debit       Decimal @default(0) @db.Decimal(14, 2)
+  credit      Decimal @default(0) @db.Decimal(14, 2)
+  costCenter  String?
+  analytics   Json?
+  vatCode     String?
+  partnerType String?
+  partnerId   String?
+
+  entry   JournalEntry  @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  account LedgerAccount @relation(fields: [accountId], references: [id])
+
+  @@map("journal_lines")
+}
+
+model Payment {
+  id                String   @id @default(uuid(7))
+  /// IN | OUT
+  direction         String
+  /// TRANSFER | DIRECT_DEBIT | CARD | CASH
+  method            String
+  amount            Decimal  @db.Decimal(14, 2)
+  currency          String   @default("EUR")
+  valueDate         DateTime @db.Date
+  counterpartyName  String
+  ibanLast4         String?
+  reference         String?
+  /// PREPARED | TO_APPROVE | APPROVED | EXECUTED | REJECTED | RECONCILED
+  status            String   @default("PREPARED")
+  batchRef          String?
+  invoiceId         String?
+  supplierInvoiceId String?
+  approvalId        String?
+  createdById       String
+  createdAt         DateTime @default(now())
+
+  @@map("payments")
+}
+
+model Budget {
+  id           String   @id @default(uuid(7))
+  siteId       String?
+  departmentId String?
+  year         Int
+  category     String
+  amount       Decimal  @db.Decimal(14, 2)
+  consumed     Decimal  @default(0) @db.Decimal(14, 2)
+  status       String   @default("DRAFT")
+  approvedById String?
+  createdAt    DateTime @default(now())
+
+  @@map("budgets")
+}
+
+/// Coût de revient : secret commercial
+model CostSheet {
+  id               String   @id @default(uuid(7))
+  productId        String
+  recipeId         String
+  recipeVersion    Int
+  period           String
+  /// STANDARD | ACTUAL
+  method           String
+  materialCost     Decimal  @db.Decimal(14, 4)
+  packagingCost    Decimal  @db.Decimal(14, 4)
+  laborCost        Decimal  @db.Decimal(14, 4)
+  energyCost       Decimal  @db.Decimal(14, 4)
+  overheadCost     Decimal  @db.Decimal(14, 4)
+  totalCostPerKg   Decimal  @db.Decimal(14, 4)
+  totalCostPerUnit Decimal  @db.Decimal(14, 4)
+  assumptions      Json
+  computedAt       DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id])
+
+  @@unique([productId, period, method])
+  @@map("cost_sheets")
+}
+
+model Asset {
+  id                String   @id @default(uuid(7))
+  siteId            String
+  code              String   @unique
+  label             String
+  category          String
+  acquisitionDate   DateTime @db.Date
+  acquisitionValue  Decimal  @db.Decimal(14, 2)
+  depreciationYears Int
+  netBookValue      Decimal  @db.Decimal(14, 2)
+  machineId         String?
+  status            String   @default("ACTIVE")
+
+  @@map("assets")
+}
+
+model ExpenseReport {
+  id           String    @id @default(uuid(7))
+  number       String    @unique
+  employeeId   String
+  siteId       String
+  departmentId String?
+  /// DRAFT | SUBMITTED | MANAGER_APPROVED | FINANCE_APPROVED | PAID | REJECTED
+  status       String    @default("DRAFT")
+  totalAmount  Decimal   @default(0) @db.Decimal(14, 2)
+  /// [{ date, category, amount, vatAmount, receiptKey, km }]
+  lines        Json      @default("[]")
+  approvalId   String?
+  submittedAt  DateTime?
+  decidedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@map("expense_reports")
+}
+
+// =============================================================================
+// 16. SANTÉ, SÉCURITÉ, ENVIRONNEMENT
+// =============================================================================
+
+enum IncidentKind {
+  WORK_ACCIDENT
+  COMMUTE_ACCIDENT
+  NEAR_MISS
+  UNSAFE_CONDITION
+  FIRE
+  ENVIRONMENTAL
+  FOOD_SAFETY
+}
+
+model Incident {
+  id                   String       @id @default(uuid(7))
+  number               String       @unique
+  siteId               String
+  reportedByEmployeeId String
+  /// Victime éventuelle : accès restreint au conseiller en prévention et à la RH
+  victimEmployeeId     String?
+  kind                 IncidentKind
+  /// NO_LOST_TIME | LOST_TIME | SERIOUS | FATAL
+  severity             String?
+  occurredAt           DateTime
+  location             String
+  zoneId               String?
+  machineId            String?
+  description          String
+  immediateActions     String?
+  witnesses            Json         @default("[]")
+  photos               String[]
+  /// DECLARED | ANALYSIS | ACTIONS | CLOSED
+  status               String       @default("DECLARED")
+  /// Déclaration à l'assureur accidents du travail
+  insurerDeclaredAt    DateTime?
+  rootCause            String?
+  lostDays             Int?
+  closedAt             DateTime?
+  createdAt            DateTime     @default(now())
+
+  @@index([siteId, occurredAt])
+  @@map("incidents")
+}
+
+model RiskAssessment {
+  id           String    @id @default(uuid(7))
+  siteId       String
+  zoneId       String?
+  machineId    String?
+  positionId   String?
+  title        String
+  /// [{ hazard, severity 1-4, probability 1-4, score, existingMeasures }]
+  hazards      Json
+  measures     Json
+  version      Int       @default(1)
+  status       String    @default("DRAFT")
+  approvedById String?
+  reviewedAt   DateTime?
+  nextReviewAt DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@map("risk_assessments")
+}
+
+model WorkPermit {
+  id                    String    @id @default(uuid(7))
+  number                String    @unique
+  siteId                String
+  /// HOT_WORK | WORK_AT_HEIGHT | LOTO | CONFINED_SPACE | FOOD_ZONE_WORK
+  kind                  String
+  requestedByEmployeeId String?
+  contractorUserId      String?
+  workOrderId           String?
+  machineId             String?
+  zoneId                String?
+  startsAt              DateTime
+  endsAt                DateTime
+  precautions           Json
+  /// REQUESTED | APPROVED | ACTIVE | CLOSED | CANCELLED
+  status                String    @default("REQUESTED")
+  approvedById          String?
+  closedById            String?
+  fireWatchUntil        DateTime?
+  createdAt             DateTime  @default(now())
+
+  @@map("work_permits")
+}
+
+model EnvironmentalMetric {
+  id        String   @id @default(uuid(7))
+  siteId    String
+  /// ELECTRICITY_KWH | GAS_KWH | WATER_M3 | WASTE_KG | CO2_KG | STEAM_T
+  kind      String
+  period    String
+  value     Decimal  @db.Decimal(14, 3)
+  unit      String
+  /// METER | INVOICE | ESTIMATE
+  source    String
+  meterId   String?
+  createdAt DateTime @default(now())
+
+  @@unique([siteId, kind, period])
+  @@map("environmental_metrics")
+}
+
+// =============================================================================
+// 17. COMMUNICATION, DOCUMENTS, TÂCHES, VALIDATIONS
+// =============================================================================
+
+model Announcement {
+  id           String    @id @default(uuid(7))
+  siteId       String?
+  title        String
+  body         String
+  /// { siteIds, departmentIds, roles }
+  audience     Json      @default("{}")
+  /// INFO | IMPORTANT | URGENT
+  priority     String    @default("INFO")
+  requiresAck  Boolean   @default(false)
+  publishedAt  DateTime?
+  expiresAt    DateTime?
+  authorUserId String
+  createdAt    DateTime  @default(now())
+
+  acks AnnouncementAck[]
+
+  @@map("announcements")
+}
+
+model AnnouncementAck {
+  announcementId String
+  userId         String
+  at             DateTime @default(now())
+
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+
+  @@id([announcementId, userId])
+  @@map("announcement_acks")
+}
+
+model Document {
+  id           String    @id @default(uuid(7))
+  siteId       String?
+  departmentId String?
+  ownerUserId  String
+  title        String
+  /// PROCEDURE | WORK_INSTRUCTION | SAFETY_DATA_SHEET | MEMO | FORM | POLICY | OTHER
+  category     String
+  /// ALL_STAFF | DEPARTMENT | RESTRICTED
+  visibility   String    @default("RESTRICTED")
+  version      Int       @default(1)
+  /// DRAFT | IN_REVIEW | PUBLISHED | ARCHIVED
+  status       String    @default("DRAFT")
+  fileKey      String
+  mimeType     String
+  size         Int
+  tags         String[]
+  reviewDueAt  DateTime?
+  approvedById String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@map("documents")
+}
+
+model Task {
+  id                 String    @id @default(uuid(7))
+  title              String
+  description        String?
+  assigneeEmployeeId String?
+  teamId             String?
+  creatorUserId      String
+  dueAt              DateTime?
+  priority           Int       @default(3)
+  /// TODO | IN_PROGRESS | BLOCKED | DONE | CANCELLED
+  status             String    @default("TODO")
+  sourceType         String?
+  sourceId           String?
+  completedAt        DateTime?
+  createdAt          DateTime  @default(now())
+
+  @@index([assigneeEmployeeId, status])
+  @@map("tasks")
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  EXPIRED
+}
+
+/// Circuit de validation générique (packages/permissions/src/approvals.ts)
+model ApprovalRequest {
+  id                  String         @id @default(uuid(7))
+  policy              String
+  subjectType         String
+  subjectId           String
+  requesterUserId     String
+  requesterEmployeeId String?
+  amount              Decimal?       @db.Decimal(14, 2)
+  status              ApprovalStatus @default(PENDING)
+  currentStep         Int            @default(0)
+  /// Copie figée des étapes au moment de la demande : RoleKey[][]
+  steps               Json
+  siteId              String?
+  dueAt               DateTime?
+  createdAt           DateTime       @default(now())
+  closedAt            DateTime?
+
+  decisions ApprovalDecision[]
+
+  @@index([status, policy])
+  @@index([subjectType, subjectId])
+  @@map("approval_requests")
+}
+
+model ApprovalDecision {
+  id               String   @id @default(uuid(7))
+  requestId        String
+  step             Int
+  deciderUserId    String
+  /// Décision prise par délégation
+  onBehalfOfUserId String?
+  /// APPROVED | REJECTED
+  decision         String
+  comment          String?
+  at               DateTime @default(now())
+
+  request ApprovalRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@map("approval_decisions")
+}
+
+// =============================================================================
+// 18. MONDE 3D ET PROGRESSION
+// =============================================================================
+
+enum QuestCadence {
+  DAILY
+  WEEKLY
+  ONE_OFF
+  ONBOARDING
+}
+
+/// Modèle de quête. Règle d'équipe : on récompense la qualité, la sécurité et l'entraide,
+/// jamais la vitesse en production ni le volume au détriment de la sécurité.
+model QuestTemplate {
+  id          String       @id @default(uuid(7))
+  companyId   String
+  code        String       @unique
+  title       String
+  description String?
+  roleKeys    String[]
+  cadence     QuestCadence
+  /// { event: "quality_check.created", count: 3 } ou { metric: "calls_made", target: 50 }
+  objective   Json
+  xpReward    Int
+  active      Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+
+  company Company @relation(fields: [companyId], references: [id])
+  quests  Quest[]
+
+  @@map("quest_templates")
+}
+
+model Quest {
+  id          String    @id @default(uuid(7))
+  templateId  String?
+  employeeId  String
+  teamId      String?
+  date        DateTime  @db.Date
+  title       String
+  progress    Int       @default(0)
+  target      Int
+  /// ACTIVE | COMPLETED | EXPIRED
+  status      String    @default("ACTIVE")
+  xpAwarded   Int       @default(0)
+  completedAt DateTime?
+
+  template QuestTemplate? @relation(fields: [templateId], references: [id])
+  employee Employee       @relation(fields: [employeeId], references: [id])
+
+  @@index([employeeId, date])
+  @@map("quests")
+}
+
+model XpEvent {
+  id         String   @id @default(uuid(7))
+  employeeId String
+  at         DateTime @default(now())
+  amount     Int
+  /// QUEST | ACTION | ACHIEVEMENT | STREAK
+  source     String
+  sourceId   String?
+  reason     String
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@index([employeeId, at])
+  @@map("xp_events")
+}
+
+model Achievement {
+  id          String @id @default(uuid(7))
+  code        String @unique
+  title       String
+  description String
+  icon        String
+  condition   Json
+
+  unlocked EmployeeAchievement[]
+
+  @@map("achievements")
+}
+
+model EmployeeAchievement {
+  employeeId    String
+  achievementId String
+  unlockedAt    DateTime @default(now())
+
+  employee    Employee    @relation(fields: [employeeId], references: [id])
+  achievement Achievement @relation(fields: [achievementId], references: [id])
+
+  @@id([employeeId, achievementId])
+  @@map("employee_achievements")
+}
+
+// =============================================================================
+// 19. PILOTAGE
+// =============================================================================
+
+model Dashboard {
+  id          String   @id @default(uuid(7))
+  ownerUserId String?
+  title       String
+  layout      Json
+  isTemplate  Boolean  @default(false)
+  roleKeys    String[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("dashboards")
+}
+
+model Report {
+  id         String   @id @default(uuid(7))
+  code       String   @unique
+  title      String
+  /// HR | QUALITY | SALES | PURCHASING | MAINTENANCE | RETAIL | FINANCE | HSE | PRODUCTION
+  domain     String
+  /// MANAGEMENT | WORKS_COUNCIL | ALL
+  audience   String   @default("MANAGEMENT")
+  definition Json
+  schedule   String?
+  createdAt  DateTime @default(now())
+
+  @@map("reports")
+}

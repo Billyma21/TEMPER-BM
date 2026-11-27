@@ -1,0 +1,40 @@
+{
+  "name": "@temper/web",
+  "version": "0.1.0",
+  "private": true,
+  "author": "MAAYOUD",
+  "license": "UNLICENSED",
+  "scripts": {
+    "dev": "next dev --port 3000",
+    "build": "next build",
+    "start": "next start --port 3000",
+    "typecheck": "tsc --noEmit",
+    "demo": "cross-env NEXT_PUBLIC_DEMO=1 next dev --port 3000"
+  },
+  "dependencies": {
+    "@casl/ability": "^6.8.4",
+    "@react-three/drei": "^10.7.6",
+    "@react-three/fiber": "^9.4.0",
+    "@tanstack/react-query": "^5.90.5",
+    "@temper/permissions": "workspace:*",
+    "@temper/shared": "workspace:*",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.548.0",
+    "next": "16.4.6",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "socket.io-client": "^4.8.1",
+    "three": "^0.180.0",
+    "zustand": "^5.0.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.16",
+    "@types/node": "^22.18.0",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@types/three": "^0.180.0",
+    "tailwindcss": "^4.1.16",
+    "typescript": "~5.9.3",
+    "cross-env": "^10.1.0"
+  }
+}

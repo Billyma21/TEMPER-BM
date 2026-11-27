@@ -1,0 +1,30 @@
+{
+  "name": "@temper/permissions",
+  "version": "0.1.0",
+  "private": true,
+  "author": "MAAYOUD",
+  "license": "UNLICENSED",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "matrix": "tsx scripts/matrix.ts"
+  },
+  "dependencies": {
+    "@casl/ability": "^6.8.4"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.6",
+    "typescript": "~5.9.3",
+    "vitest": "^3.2.7",
+    "@types/node": "^22.18.0"
+  }
+}
