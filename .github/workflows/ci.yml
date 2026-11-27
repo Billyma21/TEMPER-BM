@@ -29,7 +29,7 @@ jobs:
       FIELD_ENCRYPTION_KEY: ci-field-key
       BADGE_UID_PEPPER: ci-pepper-value
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
