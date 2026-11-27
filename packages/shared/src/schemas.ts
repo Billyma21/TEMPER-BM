@@ -172,6 +172,55 @@ export const BalanceSettleSchema = z.object({
 });
 export type BalanceSettleInput = z.infer<typeof BalanceSettleSchema>;
 
+export const RecipeVersionSchema = z.object({
+  notes: z.string().trim().max(500).optional(),
+});
+export type RecipeVersionInput = z.infer<typeof RecipeVersionSchema>;
+
+export const OrderLaunchSchema = z.object({
+  recipeId: z.uuid(),
+  lineId: z.uuid(),
+  teamId: z.uuid(),
+  productId: z.uuid().optional(),
+  plannedQtyKg: z.number().positive().max(100_000),
+  plannedStart: z.iso.datetime(),
+  plannedEnd: z.iso.datetime(),
+});
+export type OrderLaunchInput = z.infer<typeof OrderLaunchSchema>;
+
+export const OrderStartSchema = z.object({
+  changeover: z.boolean().optional(),
+});
+export type OrderStartInput = z.infer<typeof OrderStartSchema>;
+
+export const ConsumeLotSchema = z.object({
+  batchCode: z.string().trim().min(3).max(80),
+  quantity: z.number().positive().max(100_000),
+});
+export type ConsumeLotInput = z.infer<typeof ConsumeLotSchema>;
+
+export const OutputLotSchema = z.object({
+  quantityKg: z.number().positive().max(100_000),
+  scrapKg: z.number().min(0).max(100_000).optional(),
+});
+export type OutputLotInput = z.infer<typeof OutputLotSchema>;
+
+export const LineDowntimeSchema = z.object({
+  category: z.enum(['BREAKDOWN', 'CHANGEOVER', 'CLEANING', 'MATERIAL_SHORTAGE', 'STAFF_SHORTAGE', 'QUALITY_HOLD', 'MICRO_STOP', 'PLANNED']),
+  reason: z.string().trim().max(300).optional(),
+});
+export type LineDowntimeInput = z.infer<typeof LineDowntimeSchema>;
+
+export const QuestDrawSchema = z.object({
+  employeeId: z.uuid(),
+});
+export type QuestDrawInput = z.infer<typeof QuestDrawSchema>;
+
+export const QuestProgressSchema = z.object({
+  event: z.string().trim().min(3).max(60),
+});
+export type QuestProgressInput = z.infer<typeof QuestProgressSchema>;
+
 export interface KioskScanResult {
   ok: boolean;
   kind?: 'IN' | 'OUT' | 'BREAK_START' | 'BREAK_END';
