@@ -79,6 +79,8 @@ function demoResponse<T>(path: string, init?: RequestInit): T {
   if (path.startsWith('/organisation/chart')) return { people: [] } as T;
   if (path.startsWith('/access/evacuation')) return { generatedAt: new Date().toISOString(), muster: 'Point de rassemblement du parking nord', zones: [], evacuation: false } as T;
   if (path.startsWith('/people/roles/review')) return { items: [] } as T;
+  if (path.startsWith('/time/schedules/week')) return { from: '', items: [] } as T;
+  if (path.startsWith('/time/anomalies')) return { items: [] } as T;
   const clean = path.split('?')[0] ?? path;
   if (clean.endsWith('/meta')) return { subject: '', label: '', fields: [] } as T;
   if (clean.endsWith('/audit')) return { items: [] } as T;

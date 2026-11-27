@@ -13,6 +13,7 @@ import { useTranslations } from 'next-intl';
 import { ResourceBrowser } from '@/components/bureau/ResourceBrowser';
 import { EvacuationBoard } from '@/components/bureau/EvacuationBoard';
 import { OrgChart } from '@/components/bureau/OrgChart';
+import { DayBoard, WeekBoard } from '@/components/bureau/TimeBoards';
 import { VisitorDesk } from '@/components/bureau/VisitorDesk';
 import { subjectFromSegment } from '@/lib/resources';
 import { useSession } from '@/lib/session';
@@ -34,6 +35,8 @@ function ResourceGate() {
   if (opened && module === 'organisation' && resource === 'organigramme') return <OrgChart />;
   if (opened && module === 'acces' && resource === 'evacuation') return <EvacuationBoard />;
   if (opened && module === 'acces' && resource === 'visiteurs') return <VisitorDesk />;
+  if (opened && module === 'temps' && resource === 'planning') return <WeekBoard />;
+  if (opened && module === 'temps' && resource === 'journee') return <DayBoard />;
   const subject = key ? subjectFromSegment(key, resource) : undefined;
   const allowed = key && subject && me.modules.some((item) => item.key === key) && ability.can('read', subject);
 

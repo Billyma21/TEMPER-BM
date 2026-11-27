@@ -16,6 +16,7 @@ import { useSession } from '@/lib/session';
 export default function ModulePage() {
   const t = useTranslations('resource');
   const desk = useTranslations('desk');
+  const time = useTranslations('time');
   const { module } = useParams<{ module: string }>();
   const { me, ability } = useSession();
   const key = (Object.keys(MODULES) as ModuleKey[]).find((item) => MODULES[item].route === `/${module}`);
@@ -62,6 +63,18 @@ export default function ModulePage() {
             <h2 className="text-sm font-semibold">{desk('chart')}</h2>
             <p className="mt-2 text-xs font-medium text-lavande-600">{t('open')}</p>
           </Link>
+        )}
+        {module === 'temps' && (
+          <>
+            <Link href="/temps/planning" className="rounded-2xl bg-white p-4 shadow-sm hover:ring-2 hover:ring-lavande-300">
+              <h2 className="text-sm font-semibold">{time('planning')}</h2>
+              <p className="mt-2 text-xs font-medium text-lavande-600">{t('open')}</p>
+            </Link>
+            <Link href="/temps/journee" className="rounded-2xl bg-white p-4 shadow-sm hover:ring-2 hover:ring-lavande-300">
+              <h2 className="text-sm font-semibold">{time('day')}</h2>
+              <p className="mt-2 text-xs font-medium text-lavande-600">{t('open')}</p>
+            </Link>
+          </>
         )}
         {module === 'acces' && (
           <>

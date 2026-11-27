@@ -133,6 +133,48 @@ export class ApprovalsService {
       const assignment = await this.prisma.db.roleAssignment.findFirst({ where: { approvalRequestId: row.id }, select: { userId: true } });
       if (assignment) await this.access.invalidate(assignment.userId);
     }
+    if (closed && row.policy === 'LEAVE_REQUEST') await this.applyLeave(row.subjectId, accepted);
+    if (closed && row.policy === 'TIME_CORRECTION') await this.applyCorrection(row.subjectId, accepted);
     return { id: updated.id, status: updated.status, currentStep: updated.currentStep };
+  }
+
+  private async applyLeave(id: string, accepted: boolean) {
+    const leave = await this.prisma.db.leaveRequest.findUnique({ where: { id } });
+    if (!leave) return;
+    await this.prisma.db.leaveRequest.update({
+      where: { id },
+      data: { status: accepted ? 'APPROVED' : 'REJECTED', decidedAt: new Date() },
+    });
+    if (!accepted) {
+      await this.prisma.db.leaveBalance.updateMany({
+        where: { employeeId: leave.employeeId, leaveTypeId: leave.leaveTypeId, year: leave.startDate.getUTCFullYear() },
+        data: { plannedDays: { decrement: leave.days } },
+      });
+    }
+  }
+
+  /** Une correction acceptée ajoute un pointage. Elle ne réécrit jamais le pointage d origine. */
+  private async applyCorrection(id: string, accepted: boolean) {
+    const correction = await this.prisma.db.timeCorrection.findUnique({ where: { id } });
+    if (!correction) return;
+    await this.prisma.db.timeCorrection.update({
+      where: { id },
+      data: { status: accepted ? 'APPROVED' : 'REJECTED', decidedAt: new Date() },
+    });
+    if (!accepted || correction.kind !== 'ADD' || !correction.proposedAt || !correction.proposedKind) return;
+    const employee = await this.prisma.db.employee.findUnique({ where: { id: correction.employeeId } });
+    if (!employee) return;
+    await this.prisma.db.timeEntry.create({
+      data: {
+        employeeId: employee.id,
+        siteId: employee.siteId,
+        departmentId: employee.departmentId,
+        teamId: employee.teamId,
+        at: correction.proposedAt,
+        kind: correction.proposedKind,
+        source: 'IMPORT',
+        clientEventId: `correction-${correction.id}`,
+      },
+    });
   }
 }

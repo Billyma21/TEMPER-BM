@@ -103,6 +103,56 @@ export const EvacuationSchema = z.object({
 });
 export type EvacuationInput = z.infer<typeof EvacuationSchema>;
 
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+export const WeekPublishSchema = z.object({
+  weekStart: isoDate,
+  siteId: z.uuid().optional(),
+});
+export type WeekPublishInput = z.infer<typeof WeekPublishSchema>;
+
+export const CloseDaySchema = z.object({
+  date: isoDate,
+  siteId: z.uuid().optional(),
+});
+export type CloseDayInput = z.infer<typeof CloseDaySchema>;
+
+export const TimeCorrectionAskSchema = z.object({
+  employeeId: z.uuid(),
+  date: isoDate,
+  kind: z.enum(['ADD', 'VOID', 'MOVE']),
+  proposedAt: z.iso.datetime().optional(),
+  proposedKind: z.enum(['IN', 'OUT', 'BREAK_START', 'BREAK_END']).optional(),
+  reason: z.string().trim().min(3).max(500),
+  targetTimeEntryId: z.uuid().optional(),
+});
+export type TimeCorrectionAskInput = z.infer<typeof TimeCorrectionAskSchema>;
+
+export const LeaveAskSchema = z.object({
+  leaveTypeId: z.uuid(),
+  startDate: isoDate,
+  endDate: isoDate,
+  comment: z.string().trim().max(300).optional(),
+});
+export type LeaveAskInput = z.infer<typeof LeaveAskSchema>;
+
+export const AbsenceAskSchema = z.object({
+  employeeId: z.uuid().optional(),
+  type: z.enum(['SICKNESS', 'WORK_ACCIDENT', 'COMMUTE_ACCIDENT', 'PRIVATE_ACCIDENT', 'UNJUSTIFIED', 'FORCE_MAJEURE', 'OTHER']),
+  startDate: isoDate,
+  endDate: isoDate.optional(),
+  certificateKey: z.string().max(200).optional(),
+  incidentId: z.uuid().optional(),
+});
+export type AbsenceInput = z.infer<typeof AbsenceAskSchema>;
+
+export const SensorReadingSchema = z.object({
+  at: z.iso.datetime().optional(),
+  temperatureC: z.number().min(-40).max(80),
+  humidityPct: z.number().min(0).max(100).optional(),
+});
+export type SensorReadingInput = z.infer<typeof SensorReadingSchema>;
+
 export interface KioskScanResult {
   ok: boolean;
   kind?: 'IN' | 'OUT' | 'BREAK_START' | 'BREAK_END';

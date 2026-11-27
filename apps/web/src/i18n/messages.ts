@@ -87,6 +87,13 @@ const fr = {
     clear: 'Rien à signaler.',
     self: 'Libre-service',
   },
+  time: {
+    planning: 'Planning',
+    day: 'Journée',
+    emptyWeek: 'Aucun poste publié pour cette semaine.',
+    anomalies: 'Anomalies à traiter',
+    noAnomaly: 'Aucune anomalie.',
+  },
   desk: {
     chart: 'Organigramme',
     chartEmpty: 'Aucune personne dans votre périmètre.',
@@ -207,6 +214,13 @@ const nl: typeof fr = {
     clear: 'Niets te melden.',
     self: 'Zelfbediening',
   },
+  time: {
+    planning: 'Planning',
+    day: 'Dag',
+    emptyWeek: 'Geen gepubliceerde dienst deze week.',
+    anomalies: 'Afwijkingen te behandelen',
+    noAnomaly: 'Geen afwijking.',
+  },
   desk: {
     chart: 'Organigram',
     chartEmpty: 'Niemand binnen uw bereik.',
@@ -326,6 +340,13 @@ const en: typeof fr = {
     watch: 'To watch in my scope',
     clear: 'Nothing to report.',
     self: 'Self-service',
+  },
+  time: {
+    planning: 'Schedule',
+    day: 'Day',
+    emptyWeek: 'No published shift this week.',
+    anomalies: 'Anomalies to handle',
+    noAnomaly: 'No anomaly.',
   },
   desk: {
     chart: 'Organisation chart',

@@ -4,6 +4,7 @@
  * MAAYOUD
  */
 import 'reflect-metadata';
+import { randomUUID } from 'node:crypto';
 import { execSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -499,6 +500,164 @@ describe('Gabarit CRUD', () => {
     expect(lost.body.denyReason).toBe('BADGE_INACTIVE');
     const alert = await db.notification.findFirst({ where: { title: 'Badge inactif présenté' } });
     expect(alert).toBeTruthy();
+  });
+
+  it('publie la rotation, calcule la journée et n altère pas le pointage brut', async () => {
+    const secours = actors.find((actor) => actor.email.startsWith('secours'))!;
+    const emma = actors.find((actor) => actor.email.startsWith('emma'))!;
+    const refused = await request(server).post('/api/v1/time/schedules/rotation').set('Cookie', emma.cookie).send({ weekStart: '2027-01-04' });
+    expect(refused.status).toBe(403);
+    const published = await request(server).post('/api/v1/time/schedules/rotation').set('Cookie', secours.cookie).send({ weekStart: '2027-01-04' });
+    expect(published.status, JSON.stringify(published.body)).toBe(201);
+    const team = await db.team.findFirstOrThrow({ where: { code: 'PROD-A' } });
+    const week = await request(server).get(`/api/v1/time/schedules/week?teamId=${team.id}&from=2027-01-04`).set('Cookie', secours.cookie);
+    expect(week.status).toBe(200);
+    expect(week.body.items.length).toBeGreaterThan(0);
+
+    const { brusselsInstant } = await import('../src/time/calendar.js');
+    const day = new Date('2026-03-03T00:00:00.000Z');
+    const employee = await db.employee.findUniqueOrThrow({ where: { id: emma.employeeId! } });
+    const planned = await db.schedule.findFirst({ where: { employeeId: employee.id, date: day } });
+    if (!planned) {
+      await db.schedule.create({
+        data: {
+          employeeId: employee.id,
+          siteId: employee.siteId,
+          departmentId: employee.departmentId,
+          teamId: employee.teamId,
+          date: day,
+          plannedStart: brusselsInstant('2026-03-03', '06:00'),
+          plannedEnd: brusselsInstant('2026-03-03', '14:00'),
+          plannedBreakMin: 30,
+          status: 'PUBLISHED',
+          createdById: 'test',
+        },
+      });
+    }
+    const boundsStart = brusselsInstant('2026-03-03', '00:00');
+    const boundsEnd = brusselsInstant('2026-03-04', '00:00');
+    const punches = await db.timeEntry.count({ where: { employeeId: employee.id, at: { gte: boundsStart, lt: boundsEnd } } });
+    if (!punches) {
+      await db.timeEntry.create({
+        data: { employeeId: employee.id, siteId: employee.siteId, departmentId: employee.departmentId, teamId: employee.teamId, at: brusselsInstant('2026-03-03', '06:05'), kind: 'IN', source: 'BADGE', clientEventId: `s4-in-${employee.id}` },
+      });
+      await db.timeEntry.create({
+        data: { employeeId: employee.id, siteId: employee.siteId, departmentId: employee.departmentId, teamId: employee.teamId, at: brusselsInstant('2026-03-03', '14:00'), kind: 'OUT', source: 'BADGE', clientEventId: `s4-out-${employee.id}` },
+      });
+    }
+    const other = await db.employee.findFirstOrThrow({ where: { team: { code: 'PROD-B' }, status: 'ACTIVE', id: { not: employee.id } } });
+    const otherPlan = await db.schedule.findFirst({ where: { employeeId: other.id, date: day } });
+    if (!otherPlan) {
+      await db.schedule.create({
+        data: {
+          employeeId: other.id,
+          siteId: other.siteId,
+          departmentId: other.departmentId,
+          teamId: other.teamId,
+          date: day,
+          plannedStart: brusselsInstant('2026-03-03', '14:00'),
+          plannedEnd: brusselsInstant('2026-03-03', '22:00'),
+          status: 'PUBLISHED',
+          createdById: 'test',
+        },
+      });
+    }
+    const closed = await request(server).post('/api/v1/time/days/close').set('Cookie', secours.cookie).send({ date: '2026-03-03' });
+    expect(closed.status, JSON.stringify(closed.body)).toBe(200);
+    const mine = await db.dailyAttendance.findUniqueOrThrow({ where: { employeeId_date: { employeeId: employee.id, date: day } } });
+    expect(mine.workedMinutes).toBeGreaterThan(400);
+    expect(mine.lateMinutes).toBeGreaterThanOrEqual(5);
+    expect(mine.anomalies).not.toContain('MISSING_OUT');
+    const absent = await db.dailyAttendance.findUniqueOrThrow({ where: { employeeId_date: { employeeId: other.id, date: day } } });
+    expect(absent.anomalies).toContain('ABSENT');
+
+    const before = await db.timeEntry.count({ where: { employeeId: employee.id } });
+    const correction = await request(server).post('/api/v1/time/corrections').set('Cookie', emma.cookie).send({
+      employeeId: employee.id,
+      date: '2026-03-02',
+      kind: 'ADD',
+      proposedAt: '2026-03-02T16:00:00.000Z',
+      proposedKind: 'OUT',
+      reason: 'Oubli de badge en fin de poste',
+    });
+    expect(correction.status, JSON.stringify(correction.body)).toBe(201);
+    expect(await db.timeEntry.count({ where: { employeeId: employee.id } })).toBe(before);
+    const marcCookie = await login('marc.dubois@maison-aurum.test');
+    const decided = await request(server).post(`/api/v1/approvals/${correction.body.requestId}/decide`).set('Cookie', marcCookie).send({ decision: 'APPROVED', comment: 'Oubli confirmé' });
+    expect(decided.status, JSON.stringify(decided.body)).toBe(200);
+    const added = await db.timeEntry.findUniqueOrThrow({ where: { clientEventId: `correction-${correction.body.id}` } });
+    expect(added.source).toBe('IMPORT');
+
+    const type = await db.leaveType.findFirstOrThrow({ where: { code: 'LEGAL_HOLIDAY' } });
+    await db.leaveBalance.updateMany({ where: { employeeId: employee.id, leaveTypeId: type.id, year: 2026 }, data: { plannedDays: 0, takenDays: 0 } });
+    const leave = await request(server).post('/api/v1/time/leave').set('Cookie', emma.cookie).send({ leaveTypeId: type.id, startDate: '2026-12-07', endDate: '2026-12-07' });
+    expect(leave.status, JSON.stringify(leave.body)).toBe(201);
+    expect(Number(leave.body.days)).toBe(1);
+    const leaveDecision = await request(server).post(`/api/v1/approvals/${leave.body.requestId}/decide`).set('Cookie', marcCookie).send({ decision: 'APPROVED' });
+    expect(leaveDecision.body.status).toBe('APPROVED');
+
+    const absence = await request(server).post('/api/v1/time/absences').set('Cookie', emma.cookie).send({
+      type: 'SICKNESS',
+      startDate: '2026-04-01',
+      endDate: '2026-04-02',
+      certificateKey: 'certificats/emma-2026-04.pdf',
+    });
+    expect(absence.status, JSON.stringify(absence.body)).toBe(201);
+    const storedAbsence = await db.absence.findUniqueOrThrow({ where: { id: absence.body.id } });
+    expect(storedAbsence.type).toBe('SICKNESS');
+    expect(storedAbsence.comment).toBeNull();
+  });
+
+  it('tient le p95 du pointage sous 300 ms et alerte un capteur chaud', async () => {
+    const secours = actors.find((actor) => actor.email.startsWith('secours'))!;
+    const emma = actors.find((actor) => actor.email.startsWith('emma'))!;
+    const zone = await db.accessZone.findFirstOrThrow({ where: { code: 'ACCUEIL' } });
+    const secret = 'capteur-sprint4';
+    const sensor = await db.device.create({
+      data: { siteId: zone.siteId, kind: 'ENV_SENSOR', name: 'Capteur test', serial: `SENSOR-S4-${Date.now()}`, secretHash: sha256(secret), status: 'ACTIVE' },
+    });
+    const hot = await request(server).post('/api/v1/time/sensors').set('Authorization', `Device ${sensor.id}.${secret}`).send({ temperatureC: 21.5, humidityPct: 55 });
+    expect(hot.status, JSON.stringify(hot.body)).toBe(200);
+    expect(hot.body.alert).toBe(true);
+    const asUser = await request(server).post('/api/v1/time/sensors').set('Cookie', secours.cookie).send({ temperatureC: 16 });
+    expect(asUser.status).toBe(403);
+
+    const employee = await db.employee.findUniqueOrThrow({ where: { id: emma.employeeId! } });
+    const badgeSecret = `04S4${Date.now().toString(16).slice(-6).toUpperCase()}B2`;
+    await db.badge.create({
+      data: {
+        holderEmployeeId: employee.id,
+        siteId: employee.siteId,
+        uidHash: badgeUidHash(badgeSecret, process.env.BADGE_UID_PEPPER ?? ''),
+        uidLast4: '4404',
+        technology: 'MIFARE_DESFIRE',
+        kind: 'PERMANENT',
+        status: 'ACTIVE',
+        issuedById: 'test',
+      },
+    });
+    const readerSecret = 'lecteur-sprint4';
+    const reader = await db.device.create({
+      data: { siteId: zone.siteId, accessZoneId: zone.id, kind: 'CLOCK_KIOSK', name: 'Borne test charge', serial: `KIOSK-S4-${Date.now()}`, secretHash: sha256(readerSecret), status: 'ACTIVE' },
+    });
+    const durations: number[] = [];
+    for (let index = 0; index < 22; index += 1) {
+      const started = performance.now();
+      const scan = await request(server)
+        .post('/api/v1/time/kiosk/scan')
+        .set('Authorization', `Device ${reader.id}.${readerSecret}`)
+        .send({
+          badgeUid: badgeSecret,
+          clientEventId: randomUUID(),
+          kind: index % 2 === 0 ? 'IN' : 'OUT',
+        });
+      durations.push(performance.now() - started);
+      expect(scan.status, JSON.stringify(scan.body)).toBe(200);
+      expect(scan.body.ok).toBe(true);
+    }
+    durations.sort((a, b) => a - b);
+    const p95 = durations[Math.ceil(durations.length * 0.95) - 1] ?? durations.at(-1)!;
+    expect(p95).toBeLessThan(300);
   });
 
   it('accueille un visiteur puis clôture un départ', async () => {
