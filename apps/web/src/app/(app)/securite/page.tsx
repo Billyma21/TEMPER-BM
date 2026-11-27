@@ -30,6 +30,7 @@ interface KeyRow {
 
 export default function SecurityPage() {
   const t = useTranslations('security');
+  const desk = useTranslations('desk');
   const toast = useToast();
   const qc = useQueryClient();
   const [secret, setSecret] = useState<string | null>(null);
@@ -38,6 +39,7 @@ export default function SecurityPage() {
   const [backup, setBackup] = useState<string[] | null>(null);
   const sessions = useQuery({ queryKey: ['sessions'], queryFn: () => api<{ items: SessionRow[] }>('/auth/sessions') });
   const keys = useQuery({ queryKey: ['webauthn'], queryFn: () => api<{ items: KeyRow[] }>('/auth/webauthn') });
+  const oidc = useQuery({ queryKey: ['oidc'], queryFn: () => api<{ enabled: boolean }>('/auth/oidc') });
 
   function fail(error: unknown) {
     toast(error instanceof ApiError ? (error.body?.message ?? error.message) : (error as Error).message);
@@ -47,7 +49,10 @@ export default function SecurityPage() {
     <div className="mx-auto max-w-3xl space-y-8 p-4 sm:p-6">
       <header>
         <h1 className="text-2xl font-semibold">{t('title')}</h1>
-        <p className="text-sm text-cacao-700/60">{t('intro')}</p>
+        <p className="text-sm text-cacao-800">{t('intro')}</p>
+        <p className="mt-2 text-sm text-cacao-800">
+          {desk('sso')} : {oidc.data?.enabled ? desk('ssoOn') : desk('ssoOff')}
+        </p>
       </header>
 
       <section className="space-y-3">

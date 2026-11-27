@@ -7,6 +7,7 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { APPROVAL_POLICIES, type ApprovalPolicy } from '@temper/permissions';
 import type { DecideInput } from '@temper/shared';
 import { AuditService } from '../audit/audit.service.js';
+import { AccessService } from '../permissions/access.service.js';
 import type { Principal } from '../permissions/principal.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RealtimeGateway } from '../realtime/realtime.gateway.js';
@@ -20,6 +21,7 @@ export class ApprovalsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly realtime: RealtimeGateway,
+    private readonly access: AccessService,
   ) {}
 
   async inbox(p: Principal) {
@@ -123,6 +125,14 @@ export class ApprovalsService {
       requestId: requestId ?? null,
       after: { requestId: row.id, status: updated.status },
     });
+    if (closed && row.policy === 'SENSITIVE_ROLE_ASSIGNMENT') {
+      await this.prisma.db.roleAssignment.updateMany({
+        where: { approvalRequestId: row.id, revokedAt: null },
+        data: accepted ? { validFrom: new Date(), reason: 'Circuit sensible accepté' } : { revokedAt: new Date(), revokedById: p.id },
+      });
+      const assignment = await this.prisma.db.roleAssignment.findFirst({ where: { approvalRequestId: row.id }, select: { userId: true } });
+      if (assignment) await this.access.invalidate(assignment.userId);
+    }
     return { id: updated.id, status: updated.status, currentStep: updated.currentStep };
   }
 }

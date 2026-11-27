@@ -8,6 +8,7 @@ import { MODULES, type ModuleKey, ROLES, type RoleKey, asSubject, openWorldZones
 import type { AvatarOutfit, LeadRoom, WorldAlert, WorldSnapshot } from '@temper/shared';
 import type { Principal } from '../permissions/principal.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { RedisService } from '../redis/redis.service.js';
 
 const KIND_TO_ZONE: Record<string, string> = {
   OFFICE: 'siege',
@@ -25,7 +26,10 @@ const XP_PER_LEVEL = 512;
 
 @Injectable()
 export class WorldService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
+  ) {}
 
   async snapshot(p: Principal, siteIdParam?: string): Promise<WorldSnapshot> {
     const db = this.prisma.db;
@@ -93,6 +97,12 @@ export class WorldService {
       };
     });
 
+    const visitorsOnSite = await db.visitor.count({ where: { siteId: site.id, status: 'ON_SITE' } });
+    for (const building of buildings) {
+      if (building.kind === 'GATEHOUSE') building.occupancy += visitorsOnSite;
+    }
+    const evacuation = (await this.redis.get(`temper:evac:${site.id}`)) === '1';
+
     const machineWhere = prismaWhere(p.prismaRules, 'read', 'Machine');
     const machines = machineWhere
       ? (await db.machine.findMany({ where: { AND: [machineWhere, { siteId: site.id }] }, include: { line: { select: { code: true } } } })).map((m) => ({
@@ -143,6 +153,15 @@ export class WorldService {
       : [];
 
     const alerts = await this.alerts(p, site.id);
+    if (evacuation) {
+      alerts.unshift({
+        id: 'evac',
+        severity: 'CRITICAL',
+        label: 'Évacuation en cours : point de rassemblement du parking nord',
+        buildingCode: 'GARDE',
+        route: '/acces/evacuation',
+      });
+    }
     const kpis = await this.kpis(p, site.id, present.length);
     const myRole = me?.position?.defaultRoles.find((r): r is RoleKey => r in ROLES);
 
@@ -161,6 +180,7 @@ export class WorldService {
       quests,
       alerts,
       kpis,
+      gate: { visitorsOnSite, evacuation },
     };
   }
 

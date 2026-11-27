@@ -19,9 +19,14 @@ export function Hud({ data }: { data: WorldSnapshot }) {
       <div className="flex items-start justify-between gap-3">
         <div className="pointer-events-auto space-y-2">
           <div className="rounded-2xl bg-white/90 px-4 py-2.5 shadow-sm backdrop-blur">
-            <div className="text-[11px] font-medium text-cacao-700/60">Tout le site, en un coup d oeil</div>
+            <div className="text-[11px] font-medium text-cacao-800">Tout le site, en un coup d oeil</div>
             <div className="text-sm font-semibold">{data.site.name}</div>
           </div>
+          {data.gate?.evacuation && (
+            <div className="rounded-2xl border-2 border-danger bg-white px-4 py-2 text-sm font-semibold text-cacao-900">
+              Évacuation : rejoignez le point de rassemblement du parking nord.
+            </div>
+          )}
           <div className="flex max-w-[60vw] flex-wrap gap-1.5">
             {data.kpis.map((k) => (
               <span key={k.label} className="rounded-full bg-white/90 px-3 py-1 text-[11px] font-medium shadow-sm backdrop-blur">

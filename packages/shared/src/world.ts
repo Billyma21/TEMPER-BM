@@ -119,6 +119,8 @@ export interface WorldSnapshot {
   quests: WorldQuest[];
   alerts: WorldAlert[];
   kpis: Array<{ label: string; value: string; trend?: 'up' | 'down' | 'flat' }>;
+  /** Visiteurs présents au poste de garde, et état d évacuation du site. Jamais de noms ici. */
+  gate?: { visitorsOnSite: number; evacuation: boolean };
 }
 
 export const REALTIME_EVENTS = {

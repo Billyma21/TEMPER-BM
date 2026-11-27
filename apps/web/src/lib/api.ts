@@ -75,6 +75,10 @@ function demoResponse<T>(path: string, init?: RequestInit): T {
   if (method !== 'GET') throw new ApiError(409, { code: 'CONFLICT', message: 'Action indisponible en démonstration' });
   if (path.startsWith('/approvals/inbox')) return { toDecide: [], mine: [] } as T;
   if (path.startsWith('/auth/sessions') || path.startsWith('/auth/webauthn')) return { items: [] } as T;
+  if (path.startsWith('/auth/oidc')) return { enabled: false, issuer: null } as T;
+  if (path.startsWith('/organisation/chart')) return { people: [] } as T;
+  if (path.startsWith('/access/evacuation')) return { generatedAt: new Date().toISOString(), muster: 'Point de rassemblement du parking nord', zones: [], evacuation: false } as T;
+  if (path.startsWith('/people/roles/review')) return { items: [] } as T;
   const clean = path.split('?')[0] ?? path;
   if (clean.endsWith('/meta')) return { subject: '', label: '', fields: [] } as T;
   if (clean.endsWith('/audit')) return { items: [] } as T;

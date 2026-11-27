@@ -50,6 +50,13 @@ export class AuthController {
   me(@CurrentPrincipal() p: Principal) {
     return this.auth.me(p);
   }
+
+  @Public()
+  @Get('oidc')
+  oidc() {
+    const issuer = process.env.OIDC_ISSUER?.trim() || null;
+    return { enabled: Boolean(issuer), issuer };
+  }
 }
 
 /** Provisionnement des appareils : le secret n'est affiché qu'une seule fois. */

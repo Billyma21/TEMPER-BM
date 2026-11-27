@@ -16,6 +16,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CRUD_SUBJECTS } from '../src/crud/resource-meta.js';
 import { resourcePath } from '../src/crud/routes.js';
+import { badgeUidHash, sha256 } from '../src/common/crypto.js';
 import type { AccessService } from '../src/permissions/access.service.js';
 import type { Principal } from '../src/permissions/principal.js';
 
@@ -333,6 +334,7 @@ describe('Gabarit CRUD', () => {
   it('enrôle le TOTP et consomme un code de secours', async () => {
     const { totp } = await import('../src/auth/totp.js');
     const emma = actors.find((actor) => actor.email.startsWith('emma'));
+    await db.user.update({ where: { id: emma!.id }, data: { mfaEnabled: false, mfaSecretEnc: null, recoveryCodesHash: [] } });
     const enrolled = await request(server).post('/api/v1/auth/mfa/enroll').set('Cookie', emma!.cookie);
     expect(enrolled.status, JSON.stringify(enrolled.body)).toBe(201);
     expect(enrolled.body.qrSvg).toContain('<svg');
@@ -344,6 +346,7 @@ describe('Gabarit CRUD', () => {
     expect(first.status).toBe(200);
     const replay = await request(server).post('/api/v1/auth/mfa/verify').set('Cookie', emma!.cookie).send({ code: backup });
     expect(replay.status).toBe(401);
+    await db.user.update({ where: { id: emma!.id }, data: { mfaEnabled: false, mfaSecretEnc: null, recoveryCodesHash: [] } });
   });
 
   it('refuse une demande à son auteur et l accepte au manager', async () => {
@@ -400,5 +403,141 @@ describe('Gabarit CRUD', () => {
       response: { clientDataJSON: 'aaaaaaaa', attestationObject: 'aaaaaaaa' },
     });
     expect(refused.status).toBe(400);
+  });
+
+  it('publie l organigramme et refuse l auto-attribution', async () => {
+    const secours = actors.find((actor) => actor.email.startsWith('secours'))!;
+    const emma = actors.find((actor) => actor.email.startsWith('emma'))!;
+    const chart = await request(server).get('/api/v1/organisation/chart').set('Cookie', secours.cookie);
+    expect(chart.status, JSON.stringify(chart.body)).toBe(200);
+    expect(chart.body.people.length).toBeGreaterThan(0);
+    expect(chart.body.people[0].personalEmail).toBeUndefined();
+    const oidc = await request(server).get('/api/v1/auth/oidc');
+    expect(oidc.status).toBe(200);
+    expect(oidc.body.enabled).toBe(false);
+    const self = await request(server).post('/api/v1/people/roles').set('Cookie', secours.cookie).send({ userId: secours.id, role: 'EMPLOYE' });
+    expect(self.status).toBe(403);
+    expect(self.body.details.reason).toBe('SELF');
+    await db.employee.update({ where: { id: emma.employeeId! }, data: { employmentType: 'STUDENT', status: 'ACTIVE', endDate: null } });
+    const student = await request(server).post('/api/v1/people/roles').set('Cookie', secours.cookie).send({ userId: emma.id, role: 'MAGASINIER' });
+    expect(student.status, JSON.stringify(student.body)).toBe(400);
+    expect(student.body.details.field).toBe('validUntil');
+    await db.employee.update({ where: { id: emma.employeeId! }, data: { employmentType: 'PERMANENT' } });
+    const sensitive = await request(server).post('/api/v1/people/roles').set('Cookie', secours.cookie).send({ userId: emma.id, role: 'ADMIN_IT' });
+    expect(sensitive.status, JSON.stringify(sensitive.body)).toBe(201);
+    expect(sensitive.body.pending).toBe(true);
+    const arrival = await request(server).post(`/api/v1/people/employees/${emma.employeeId}/onboarding`).set('Cookie', secours.cookie);
+    expect(arrival.status, JSON.stringify(arrival.body)).toBe(201);
+    expect(arrival.body.checklist.some((step: { key: string }) => step.key === 'training:FOOD_HYGIENE')).toBe(true);
+  });
+
+  it('refuse le sas sans formation, signale le manager, puis un badge perdu', async () => {
+    const secours = actors.find((actor) => actor.email.startsWith('secours'))!;
+    const emma = actors.find((actor) => actor.email.startsWith('emma'))!;
+    const zone = await db.accessZone.findFirstOrThrow({ where: { code: 'PROD' } });
+    const marc = await db.employee.findFirstOrThrow({ where: { workEmail: 'marc.dubois@maison-aurum.test' } });
+    const future = new Date(Date.now() + 30 * 86400_000);
+    await db.employee.update({ where: { id: emma.employeeId! }, data: { status: 'ACTIVE', endDate: null, managerId: marc.id } });
+    const refreshed = await db.training.updateMany({
+      where: { employeeId: emma.employeeId!, type: 'FOOD_HYGIENE' },
+      data: { status: 'COMPLETED', validUntil: future },
+    });
+    if (!refreshed.count) {
+      await db.training.create({
+        data: { employeeId: emma.employeeId!, siteId: zone.siteId, type: 'FOOD_HYGIENE', title: 'Formation FOOD_HYGIENE', status: 'COMPLETED', validUntil: future },
+      });
+    }
+    const secret = 'lecteur-sprint3';
+    const device = await db.device.create({
+      data: {
+        siteId: zone.siteId,
+        accessZoneId: zone.id,
+        kind: 'BADGE_READER',
+        name: 'Lecteur test sas',
+        serial: `READER-S3-${Date.now()}`,
+        secretHash: sha256(secret),
+        status: 'ACTIVE',
+      },
+    });
+    const uid = `04A1${Date.now().toString(16).slice(-8).toUpperCase().padStart(8, 'A')}B2C3`;
+    const badge = await db.badge.create({
+      data: {
+        holderEmployeeId: emma.employeeId!,
+        siteId: zone.siteId,
+        uidHash: badgeUidHash(uid, process.env.BADGE_UID_PEPPER ?? ''),
+        uidLast4: '0003',
+        technology: 'MIFARE_DESFIRE',
+        kind: 'PERMANENT',
+        status: 'ACTIVE',
+        issuedById: 'test',
+      },
+    });
+    const auth = `Device ${device.id}.${secret}`;
+    const ppe = ['charlotte', 'blouse', 'chaussures de sécurité'];
+    const asUser = await request(server).post('/api/v1/access/decide').set('Cookie', secours.cookie).send({ badgeUid: uid, direction: 'IN', wornPpe: ppe });
+    expect(asUser.status).toBe(403);
+    await request(server).post('/api/v1/access/decide').set('Authorization', auth).send({ badgeUid: uid, direction: 'OUT', wornPpe: ppe });
+    const granted = await request(server).post('/api/v1/access/decide').set('Authorization', auth).send({ badgeUid: uid, direction: 'IN', wornPpe: ppe });
+    expect(granted.status, JSON.stringify(granted.body)).toBe(200);
+    expect(granted.body.result).toBe('GRANTED');
+    const twice = await request(server).post('/api/v1/access/decide').set('Authorization', auth).send({ badgeUid: uid, direction: 'IN', wornPpe: ppe });
+    expect(twice.body.denyReason).toBe('ANTI_PASSBACK');
+    const roll = await request(server).get('/api/v1/access/evacuation').set('Cookie', secours.cookie);
+    expect(roll.status, JSON.stringify(roll.body)).toBe(200);
+    expect(JSON.stringify(roll.body)).toContain('Emma Janssens');
+    const hidden = await request(server).get('/api/v1/access/evacuation').set('Cookie', emma.cookie);
+    expect(hidden.status).toBe(403);
+    await db.training.updateMany({ where: { employeeId: emma.employeeId!, type: 'FOOD_HYGIENE' }, data: { validUntil: new Date('2020-01-01') } });
+    await request(server).post('/api/v1/access/decide').set('Authorization', auth).send({ badgeUid: uid, direction: 'OUT', wornPpe: ppe });
+    const expired = await request(server).post('/api/v1/access/decide').set('Authorization', auth).send({ badgeUid: uid, direction: 'IN', wornPpe: ppe });
+    expect(expired.body.denyReason).toBe('TRAINING_EXPIRED');
+    const marcUser = await db.user.findFirstOrThrow({ where: { employeeId: marc.id } });
+    const note = await db.notification.findFirst({ where: { userId: marcUser.id, title: 'Formation expirée' } });
+    expect(note).toBeTruthy();
+    await db.badge.update({ where: { id: badge.id }, data: { status: 'LOST' } });
+    const lost = await request(server).post('/api/v1/access/decide').set('Authorization', auth).send({ badgeUid: uid, direction: 'IN', wornPpe: ppe });
+    expect(lost.body.denyReason).toBe('BADGE_INACTIVE');
+    const alert = await db.notification.findFirst({ where: { title: 'Badge inactif présenté' } });
+    expect(alert).toBeTruthy();
+  });
+
+  it('accueille un visiteur puis clôture un départ', async () => {
+    const secours = actors.find((actor) => actor.email.startsWith('secours'))!;
+    const emma = actors.find((actor) => actor.email.startsWith('emma'))!;
+    const employee = await db.employee.findUniqueOrThrow({ where: { id: emma.employeeId! } });
+    const visitor = await db.visitor.create({
+      data: {
+        siteId: employee.siteId,
+        hostEmployeeId: employee.id,
+        firstName: 'Léa',
+        lastName: `Visite${Date.now().toString().slice(-4)}`,
+        purpose: 'Audit client',
+        expectedAt: new Date(),
+        retentionUntil: new Date(Date.now() + 90 * 86400_000),
+      },
+    });
+    const arrived = await request(server).post(`/api/v1/access/visitors/${visitor.id}/arrive`).set('Cookie', secours.cookie).send({ safetyBriefing: true, hygieneDeclared: true });
+    expect(arrived.status, JSON.stringify(arrived.body)).toBe(200);
+    expect(arrived.body.uidLast4).toHaveLength(4);
+    const stored = await db.badge.findUniqueOrThrow({ where: { id: arrived.body.badgeId } });
+    expect(stored.uidHash).toHaveLength(64);
+    expect(stored.uidHash).not.toBe(arrived.body.uid);
+    await db.employee.update({ where: { id: employee.id }, data: { status: 'ACTIVE', endDate: new Date('2020-01-01') } });
+    const closed = await request(server).post('/api/v1/people/offboarding/run').set('Cookie', secours.cookie);
+    expect(closed.status, JSON.stringify(closed.body)).toBe(200);
+    expect(closed.body.processed).toBeGreaterThan(0);
+    const after = await db.employee.findUniqueOrThrow({ where: { id: employee.id } });
+    expect(after.status).toBe('LEFT');
+    const badges = await db.badge.findMany({ where: { holderEmployeeId: employee.id } });
+    expect(badges.every((row) => row.status === 'RETURNED')).toBe(true);
+    const session = await db.session.findFirst({ where: { userId: emma.id, revokedAt: null } });
+    expect(session).toBeNull();
+    const denied = await request(server).post('/api/v1/people/offboarding/run').set('Cookie', emma.cookie);
+    expect(denied.status).toBe(401);
+    await db.employee.update({ where: { id: employee.id }, data: { status: 'ACTIVE', endDate: null, employmentType: 'PERMANENT' } });
+    await db.roleAssignment.updateMany({
+      where: { userId: emma.id, revokedById: 'offboarding', role: 'OPERATEUR' },
+      data: { revokedAt: null, revokedById: null },
+    });
   });
 });

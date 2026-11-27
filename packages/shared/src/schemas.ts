@@ -76,6 +76,33 @@ export const SelfClockSchema = z.object({
 });
 export type SelfClockInput = z.infer<typeof SelfClockSchema>;
 
+/** Passage devant un lecteur : l UID n est transmis qu à cet instant, jamais stocké. */
+export const AccessDecideSchema = z.object({
+  badgeUid: z.string().min(4).max(64),
+  direction: z.enum(['IN', 'OUT']),
+  wornPpe: z.array(z.string().max(80)).max(20).optional(),
+});
+export type AccessDecideInput = z.infer<typeof AccessDecideSchema>;
+
+export const VisitorArriveSchema = z.object({
+  safetyBriefing: z.literal(true),
+  hygieneDeclared: z.boolean(),
+});
+export type VisitorArriveInput = z.infer<typeof VisitorArriveSchema>;
+
+export const RoleGrantSchema = z.object({
+  userId: z.uuid(),
+  role: z.string().min(2).max(64),
+  siteId: z.uuid().optional(),
+  validUntil: z.iso.datetime().optional(),
+});
+export type RoleGrantInput = z.infer<typeof RoleGrantSchema>;
+
+export const EvacuationSchema = z.object({
+  active: z.boolean(),
+});
+export type EvacuationInput = z.infer<typeof EvacuationSchema>;
+
 export interface KioskScanResult {
   ok: boolean;
   kind?: 'IN' | 'OUT' | 'BREAK_START' | 'BREAK_END';

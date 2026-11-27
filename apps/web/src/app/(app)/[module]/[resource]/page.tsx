@@ -11,6 +11,9 @@ import { useParams } from 'next/navigation';
 import { Suspense } from 'react';
 import { useTranslations } from 'next-intl';
 import { ResourceBrowser } from '@/components/bureau/ResourceBrowser';
+import { EvacuationBoard } from '@/components/bureau/EvacuationBoard';
+import { OrgChart } from '@/components/bureau/OrgChart';
+import { VisitorDesk } from '@/components/bureau/VisitorDesk';
 import { subjectFromSegment } from '@/lib/resources';
 import { useSession } from '@/lib/session';
 
@@ -27,6 +30,10 @@ function ResourceGate() {
   const { module, resource } = useParams<{ module: string; resource: string }>();
   const { me, ability } = useSession();
   const key = (Object.keys(MODULES) as ModuleKey[]).find((item) => MODULES[item].route === `/${module}`);
+  const opened = key && me.modules.some((item) => item.key === key);
+  if (opened && module === 'organisation' && resource === 'organigramme') return <OrgChart />;
+  if (opened && module === 'acces' && resource === 'evacuation') return <EvacuationBoard />;
+  if (opened && module === 'acces' && resource === 'visiteurs') return <VisitorDesk />;
   const subject = key ? subjectFromSegment(key, resource) : undefined;
   const allowed = key && subject && me.modules.some((item) => item.key === key) && ability.can('read', subject);
 

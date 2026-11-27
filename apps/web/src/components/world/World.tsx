@@ -113,6 +113,18 @@ function Scene({ data }: { data: WorldSnapshot }) {
   // Placement des personnes : près des machines dans les halls, devant l'entrée ailleurs
   const placed = useMemo(() => {
     const out: Array<{ a: WorldSnapshot['avatars'][number]; pos: [number, number, number] }> = [];
+    const muster = data.buildings.find((building) => building.kind === 'GATEHOUSE');
+    if (data.gate?.evacuation && muster) {
+      data.avatars.forEach((avatar, index) => {
+        if (avatar.isMe && showSales) return;
+        const cols = 8;
+        out.push({
+          a: avatar,
+          pos: [muster.x - 6 + (index % cols) * 1.6, 0.12, muster.z + muster.depth / 2 + 3 + Math.floor(index / cols) * 1.6],
+        });
+      });
+      return out;
+    }
     const byBuilding = new Map<string, WorldSnapshot['avatars']>();
     for (const a of data.avatars) {
       if (a.isMe && showSales) continue;

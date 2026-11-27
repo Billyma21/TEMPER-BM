@@ -16,6 +16,8 @@ L équipe se réunit à chaque étape structurante ; chaque réunion produit des
 | 10 | Revue du sprint 1 | 2026-11-27 |
 | 11 | Planification du sprint 2 | 2026-11-27 |
 | 12 | Revue du sprint 2 | 2026-11-27 |
+| 13 | Planification du sprint 3 | 2026-11-27 |
+| 14 | Revue du sprint 3 | 2026-11-27 |
 
 ## Rôles de l équipe
 
