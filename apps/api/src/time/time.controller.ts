@@ -1,18 +1,24 @@
-import { Body, Controller, Get, HttpCode, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import {
   AbsenceAskSchema,
+  BalanceSettleSchema,
   CloseDaySchema,
+  HolidayAskSchema,
   KioskScanSchema,
   LeaveAskSchema,
+  PayrollPeriodSchema,
   SelfClockSchema,
   SensorReadingSchema,
   TimeCorrectionAskSchema,
   WeekPublishSchema,
   type AbsenceInput,
+  type BalanceSettleInput,
   type CloseDayInput,
+  type HolidayAskInput,
   type KioskScanInput,
   type LeaveAskInput,
+  type PayrollPeriodInput,
   type SelfClockInput,
   type SensorReadingInput,
   type TimeCorrectionAskInput,
@@ -22,6 +28,7 @@ import { ZodPipe } from '../common/zod.pipe.js';
 import { CurrentPrincipal, DeviceOnly, Requires } from '../permissions/decorators.js';
 import type { Principal } from '../permissions/principal.js';
 import { TimeDeskService } from './desk.service.js';
+import { PayrollService } from './payroll.service.js';
 import { TimeService } from './time.service.js';
 
 @ApiTags('temps')
@@ -30,6 +37,7 @@ export class TimeController {
   constructor(
     private readonly time: TimeService,
     private readonly desk: TimeDeskService,
+    private readonly payroll: PayrollService,
   ) {}
 
   /** Borne de pointage : badge NFC ou matricule + PIN */
@@ -106,5 +114,64 @@ export class TimeController {
   @HttpCode(200)
   sensor(@CurrentPrincipal() p: Principal, @Body(new ZodPipe(SensorReadingSchema)) body: SensorReadingInput) {
     return this.desk.sensor(p, body);
+  }
+
+  @Post('timesheets/build')
+  @Requires('create', 'Timesheet')
+  buildSheets(@CurrentPrincipal() p: Principal, @Body(new ZodPipe(PayrollPeriodSchema)) body: PayrollPeriodInput) {
+    return this.payroll.build(p, body);
+  }
+
+  @Get('timesheets')
+  @Requires('read', 'Timesheet')
+  sheets(@CurrentPrincipal() p: Principal, @Query('from') from?: string) {
+    return this.payroll.list(p, from);
+  }
+
+  @Post('timesheets/:id/submit')
+  @Requires('update', 'Timesheet')
+  @HttpCode(200)
+  submitSheet(@CurrentPrincipal() p: Principal, @Param('id') id: string) {
+    return this.payroll.submit(p, id);
+  }
+
+  @Post('timesheets/:id/manager')
+  @Requires('approve', 'Timesheet')
+  @HttpCode(200)
+  managerSheet(@CurrentPrincipal() p: Principal, @Param('id') id: string) {
+    return this.payroll.managerApprove(p, id);
+  }
+
+  @Post('timesheets/:id/payroll')
+  @Requires('export', 'Timesheet')
+  @HttpCode(200)
+  payrollSheet(@CurrentPrincipal() p: Principal, @Param('id') id: string) {
+    return this.payroll.payrollApprove(p, id);
+  }
+
+  @Post('payroll-exports')
+  @Requires('export', 'Timesheet')
+  exportSheets(@CurrentPrincipal() p: Principal, @Body(new ZodPipe(PayrollPeriodSchema)) body: PayrollPeriodInput) {
+    return this.payroll.exportSecretariat(p, body);
+  }
+
+  @Get('holidays')
+  @Requires('read', 'Schedule')
+  holidayList(@CurrentPrincipal() p: Principal, @Query('year') year?: string) {
+    return this.payroll.holidays(p, year);
+  }
+
+  @Post('holidays')
+  @Requires('update', 'Schedule')
+  @HttpCode(200)
+  holiday(@CurrentPrincipal() p: Principal, @Body(new ZodPipe(HolidayAskSchema)) body: HolidayAskInput) {
+    return this.payroll.declareHoliday(p, body);
+  }
+
+  @Post('balances/settle')
+  @Requires('update', 'LeaveBalance')
+  @HttpCode(200)
+  settle(@CurrentPrincipal() p: Principal, @Body(new ZodPipe(BalanceSettleSchema)) body: BalanceSettleInput) {
+    return this.payroll.settle(p, body);
   }
 }

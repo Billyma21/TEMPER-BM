@@ -93,6 +93,10 @@ const fr = {
     emptyWeek: 'Aucun poste publié pour cette semaine.',
     anomalies: 'Anomalies à traiter',
     noAnomaly: 'Aucune anomalie.',
+    sheets: 'Relevés',
+    holidays: 'Jours fériés',
+    emptySheets: 'Aucun relevé pour cette période.',
+    emptyHolidays: 'Aucun jour férié publié.',
   },
   desk: {
     chart: 'Organigramme',
@@ -220,6 +224,10 @@ const nl: typeof fr = {
     emptyWeek: 'Geen gepubliceerde dienst deze week.',
     anomalies: 'Afwijkingen te behandelen',
     noAnomaly: 'Geen afwijking.',
+    sheets: 'Loonstaten',
+    holidays: 'Feestdagen',
+    emptySheets: 'Geen loonstaat voor deze periode.',
+    emptyHolidays: 'Geen feestdag gepubliceerd.',
   },
   desk: {
     chart: 'Organigram',
@@ -347,6 +355,10 @@ const en: typeof fr = {
     emptyWeek: 'No published shift this week.',
     anomalies: 'Anomalies to handle',
     noAnomaly: 'No anomaly.',
+    sheets: 'Timesheets',
+    holidays: 'Public holidays',
+    emptySheets: 'No timesheet for this period.',
+    emptyHolidays: 'No published public holiday.',
   },
   desk: {
     chart: 'Organisation chart',

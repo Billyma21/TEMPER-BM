@@ -11,6 +11,7 @@ import { AccessService } from '../permissions/access.service.js';
 import type { Principal } from '../permissions/principal.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RealtimeGateway } from '../realtime/realtime.gateway.js';
+import { addDays, utcDay } from '../time/calendar.js';
 import { mayDecide, stepRoles } from './decision.js';
 
 const POLICIES = APPROVAL_POLICIES as Record<string, ApprovalPolicy>;
@@ -161,19 +162,74 @@ export class ApprovalsService {
       where: { id },
       data: { status: accepted ? 'APPROVED' : 'REJECTED', decidedAt: new Date() },
     });
-    if (!accepted || correction.kind !== 'ADD' || !correction.proposedAt || !correction.proposedKind) return;
-    const employee = await this.prisma.db.employee.findUnique({ where: { id: correction.employeeId } });
-    if (!employee) return;
-    await this.prisma.db.timeEntry.create({
+    if (!accepted) return;
+    if (correction.kind === 'ADD' && correction.proposedAt && correction.proposedKind) {
+      const employee = await this.prisma.db.employee.findUnique({ where: { id: correction.employeeId } });
+      if (employee) {
+        await this.prisma.db.timeEntry.create({
+          data: {
+            employeeId: employee.id,
+            siteId: employee.siteId,
+            departmentId: employee.departmentId,
+            teamId: employee.teamId,
+            at: correction.proposedAt,
+            kind: correction.proposedKind,
+            source: 'IMPORT',
+            clientEventId: `correction-${correction.id}`,
+          },
+        });
+      }
+    }
+    await this.regularize(correction);
+  }
+
+  /** Un relevé déjà exporté ne bouge plus. La correction ouvre une ligne sur la période suivante. */
+  private async regularize(correction: {
+    id: string;
+    employeeId: string;
+    siteId: string;
+    departmentId: string | null;
+    teamId: string | null;
+    date: Date;
+  }) {
+    const locked = await this.prisma.db.timesheet.findFirst({
+      where: {
+        employeeId: correction.employeeId,
+        status: { in: ['EXPORTED', 'LOCKED'] },
+        periodStart: { lte: correction.date },
+        periodEnd: { gte: correction.date },
+      },
+    });
+    if (!locked) return;
+    const startIso = locked.periodStart.toISOString().slice(0, 10);
+    const endIso = locked.periodEnd.toISOString().slice(0, 10);
+    let span = 0;
+    for (let cursor = startIso; cursor < endIso; cursor = addDays(cursor, 1)) span += 1;
+    const nextStart = utcDay(addDays(endIso, 1));
+    const existing = await this.prisma.db.timesheet.findUnique({
+      where: { employeeId_periodStart: { employeeId: correction.employeeId, periodStart: nextStart } },
+    });
+    if (existing) return;
+    await this.prisma.db.timesheet.create({
       data: {
-        employeeId: employee.id,
-        siteId: employee.siteId,
-        departmentId: employee.departmentId,
-        teamId: employee.teamId,
-        at: correction.proposedAt,
-        kind: correction.proposedKind,
-        source: 'IMPORT',
-        clientEventId: `correction-${correction.id}`,
+        employeeId: correction.employeeId,
+        siteId: correction.siteId,
+        departmentId: correction.departmentId,
+        teamId: correction.teamId,
+        periodStart: nextStart,
+        periodEnd: utcDay(addDays(endIso, 1 + span)),
+        status: 'OPEN',
+        totals: {
+          regularizationOf: locked.id,
+          sourceCorrectionId: correction.id,
+          workedMinutes: 0,
+          overtimeMinutes: 0,
+          nightMinutes: 0,
+          sundayMinutes: 0,
+          holidayMinutes: 0,
+          lateMinutes: 0,
+          absentDays: 0,
+        },
       },
     });
   }

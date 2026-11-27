@@ -29,6 +29,7 @@ import { RealtimeGateway } from './realtime/realtime.gateway.js';
 import { RedisService } from './redis/redis.service.js';
 import { TimeController } from './time/time.controller.js';
 import { TimeDeskService } from './time/desk.service.js';
+import { PayrollService } from './time/payroll.service.js';
 import { TimeService } from './time/time.service.js';
 import { WorldController } from './world/world.controller.js';
 import { WorldService } from './world/world.service.js';
@@ -48,6 +49,7 @@ const requestBudget = process.env.NODE_ENV === 'test' ? 20_000 : 300;
     RealtimeGateway,
     TimeService,
     TimeDeskService,
+    PayrollService,
     WorldService,
     CrudService,
     AccessDeskService,

@@ -81,6 +81,8 @@ function demoResponse<T>(path: string, init?: RequestInit): T {
   if (path.startsWith('/people/roles/review')) return { items: [] } as T;
   if (path.startsWith('/time/schedules/week')) return { from: '', items: [] } as T;
   if (path.startsWith('/time/anomalies')) return { items: [] } as T;
+  if (path.startsWith('/time/timesheets')) return { items: [] } as T;
+  if (path.startsWith('/time/holidays')) return { items: [] } as T;
   const clean = path.split('?')[0] ?? path;
   if (clean.endsWith('/meta')) return { subject: '', label: '', fields: [] } as T;
   if (clean.endsWith('/audit')) return { items: [] } as T;

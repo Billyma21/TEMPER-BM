@@ -74,6 +74,14 @@ export default function ModulePage() {
               <h2 className="text-sm font-semibold">{time('day')}</h2>
               <p className="mt-2 text-xs font-medium text-lavande-600">{t('open')}</p>
             </Link>
+            <Link href="/temps/releves" className="rounded-2xl bg-white p-4 shadow-sm hover:ring-2 hover:ring-lavande-300">
+              <h2 className="text-sm font-semibold">{time('sheets')}</h2>
+              <p className="mt-2 text-xs font-medium text-lavande-600">{t('open')}</p>
+            </Link>
+            <Link href="/temps/feries" className="rounded-2xl bg-white p-4 shadow-sm hover:ring-2 hover:ring-lavande-300">
+              <h2 className="text-sm font-semibold">{time('holidays')}</h2>
+              <p className="mt-2 text-xs font-medium text-lavande-600">{t('open')}</p>
+            </Link>
           </>
         )}
         {module === 'acces' && (

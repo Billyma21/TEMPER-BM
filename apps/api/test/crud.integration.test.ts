@@ -660,6 +660,91 @@ describe('Gabarit CRUD', () => {
     expect(p95).toBeLessThan(300);
   });
 
+  it('valide le relevé deux fois, l exporte, puis régularise', async () => {
+    const secours = actors.find((actor) => actor.email.startsWith('secours'))!;
+    const emma = actors.find((actor) => actor.email.startsWith('emma'))!;
+    const employee = await db.employee.findUniqueOrThrow({ where: { id: emma.employeeId! } });
+    await db.timesheet.deleteMany({ where: { employeeId: employee.id, periodStart: { gte: new Date('2026-03-01T00:00:00.000Z') } } });
+    const closed = await request(server).post('/api/v1/time/days/close').set('Cookie', secours.cookie).send({ date: '2026-03-03' });
+    expect(closed.status, JSON.stringify(closed.body)).toBe(200);
+    const period = { periodStart: '2026-03-02', periodEnd: '2026-03-08' };
+    const denied = await request(server).post('/api/v1/time/timesheets/build').set('Cookie', emma.cookie).send(period);
+    expect(denied.status).toBe(403);
+    const built = await request(server).post('/api/v1/time/timesheets/build').set('Cookie', secours.cookie).send(period);
+    expect(built.status, JSON.stringify(built.body)).toBe(201);
+    expect(built.body.written).toBeGreaterThan(0);
+    const sheet = await db.timesheet.findUniqueOrThrow({
+      where: { employeeId_periodStart: { employeeId: employee.id, periodStart: new Date('2026-03-02T00:00:00.000Z') } },
+    });
+    const submitDenied = await request(server).post(`/api/v1/time/timesheets/${sheet.id}/submit`).set('Cookie', emma.cookie);
+    expect(submitDenied.status).toBe(403);
+    const submitted = await request(server).post(`/api/v1/time/timesheets/${sheet.id}/submit`).set('Cookie', secours.cookie);
+    expect(submitted.body.status).toBe('SUBMITTED');
+    const marcCookie = await login('marc.dubois@maison-aurum.test');
+    const managed = await request(server).post(`/api/v1/time/timesheets/${sheet.id}/manager`).set('Cookie', marcCookie);
+    expect(managed.status, JSON.stringify(managed.body)).toBe(200);
+    expect(managed.body.status).toBe('MANAGER_APPROVED');
+    const samePerson = await request(server).post(`/api/v1/time/timesheets/${sheet.id}/payroll`).set('Cookie', marcCookie);
+    expect(samePerson.status).toBe(403);
+    const paid = await request(server).post(`/api/v1/time/timesheets/${sheet.id}/payroll`).set('Cookie', secours.cookie);
+    expect(paid.status, JSON.stringify(paid.body)).toBe(200);
+    expect(paid.body.status).toBe('PAYROLL_APPROVED');
+    const exported = await request(server).post('/api/v1/time/payroll-exports').set('Cookie', secours.cookie).send(period);
+    expect(exported.status, JSON.stringify(exported.body)).toBe(201);
+    expect(exported.body.csv).toContain(employee.employeeNumber);
+    expect(exported.body.csv).toContain(';');
+    expect(exported.body.csv).not.toContain('diagnostic');
+    const locked = await db.timesheet.findUniqueOrThrow({ where: { id: sheet.id } });
+    expect(locked.status).toBe('EXPORTED');
+    expect(locked.lockedAt).toBeTruthy();
+    const again = await request(server).post('/api/v1/time/timesheets/build').set('Cookie', secours.cookie).send(period);
+    expect(again.body.skipped).toBeGreaterThan(0);
+    const still = await db.timesheet.findUniqueOrThrow({ where: { id: sheet.id } });
+    expect(still.status).toBe('EXPORTED');
+    expect((still.totals as { workedMinutes: number }).workedMinutes).toBe((locked.totals as { workedMinutes: number }).workedMinutes);
+    const secondExport = await request(server).post('/api/v1/time/payroll-exports').set('Cookie', secours.cookie).send(period);
+    expect(secondExport.status).toBe(409);
+
+    const correction = await request(server).post('/api/v1/time/corrections').set('Cookie', emma.cookie).send({
+      employeeId: employee.id,
+      date: '2026-03-03',
+      kind: 'ADD',
+      proposedAt: '2026-03-03T15:00:00.000Z',
+      proposedKind: 'OUT',
+      reason: 'Régularisation après export',
+    });
+    expect(correction.status, JSON.stringify(correction.body)).toBe(201);
+    const decided = await request(server).post(`/api/v1/approvals/${correction.body.requestId}/decide`).set('Cookie', marcCookie).send({ decision: 'APPROVED' });
+    expect(decided.status, JSON.stringify(decided.body)).toBe(200);
+    const followUp = await db.timesheet.findUniqueOrThrow({
+      where: { employeeId_periodStart: { employeeId: employee.id, periodStart: new Date('2026-03-09T00:00:00.000Z') } },
+    });
+    expect(followUp.status).toBe('OPEN');
+    expect((followUp.totals as { regularizationOf: string }).regularizationOf).toBe(sheet.id);
+  });
+
+  it('publie un jour férié de site et recalcule les soldes', async () => {
+    const secours = actors.find((actor) => actor.email.startsWith('secours'))!;
+    const emma = actors.find((actor) => actor.email.startsWith('emma'))!;
+    const marcCookie = await login('marc.dubois@maison-aurum.test');
+    const refused = await request(server).post('/api/v1/time/holidays').set('Cookie', emma.cookie).send({ date: '2027-07-21', label: 'Fête nationale' });
+    expect(refused.status).toBe(403);
+    const teamOnly = await request(server).post('/api/v1/time/holidays').set('Cookie', marcCookie).send({ date: '2027-07-21', label: 'Fête nationale' });
+    expect(teamOnly.status).toBe(403);
+    const holiday = await request(server).post('/api/v1/time/holidays').set('Cookie', secours.cookie).send({ date: '2027-07-21', label: 'Fête nationale' });
+    expect(holiday.status, JSON.stringify(holiday.body)).toBe(200);
+    expect(holiday.body.date).toBe('2027-07-21');
+    const listed = await request(server).get('/api/v1/time/holidays?year=2027').set('Cookie', secours.cookie);
+    expect(listed.body.items.some((row: { date: string }) => row.date === '2027-07-21')).toBe(true);
+    const settleDenied = await request(server).post('/api/v1/time/balances/settle').set('Cookie', emma.cookie).send({ year: 2026, employeeId: emma.employeeId });
+    expect(settleDenied.status).toBe(403);
+    const first = await request(server).post('/api/v1/time/balances/settle').set('Cookie', secours.cookie).send({ year: 2026, employeeId: emma.employeeId });
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    expect(first.body.updated).toBeGreaterThan(0);
+    const second = await request(server).post('/api/v1/time/balances/settle').set('Cookie', secours.cookie).send({ year: 2026, employeeId: emma.employeeId });
+    expect(second.body.balances).toEqual(first.body.balances);
+  });
+
   it('accueille un visiteur puis clôture un départ', async () => {
     const secours = actors.find((actor) => actor.email.startsWith('secours'))!;
     const emma = actors.find((actor) => actor.email.startsWith('emma'))!;

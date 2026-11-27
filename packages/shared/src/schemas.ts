@@ -153,6 +153,25 @@ export const SensorReadingSchema = z.object({
 });
 export type SensorReadingInput = z.infer<typeof SensorReadingSchema>;
 
+export const PayrollPeriodSchema = z.object({
+  periodStart: isoDate,
+  periodEnd: isoDate,
+});
+export type PayrollPeriodInput = z.infer<typeof PayrollPeriodSchema>;
+
+export const HolidayAskSchema = z.object({
+  date: isoDate,
+  label: z.string().trim().min(3).max(120),
+  isReplacement: z.boolean().optional(),
+});
+export type HolidayAskInput = z.infer<typeof HolidayAskSchema>;
+
+export const BalanceSettleSchema = z.object({
+  year: z.number().int().min(2000).max(2100),
+  employeeId: z.uuid().optional(),
+});
+export type BalanceSettleInput = z.infer<typeof BalanceSettleSchema>;
+
 export interface KioskScanResult {
   ok: boolean;
   kind?: 'IN' | 'OUT' | 'BREAK_START' | 'BREAK_END';
